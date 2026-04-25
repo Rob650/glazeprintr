@@ -76,7 +76,7 @@ def _get_thread_context(tweet: dict) -> list[dict] | None:
     return None
 
 
-def process_tweet(tweet: dict):
+def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
     if is_paused():
         logger.info("Bot paused — skipping tweet")
         return
@@ -93,7 +93,8 @@ def process_tweet(tweet: dict):
         logger.debug(f"Skipping reply to {tweet['id']}: {reason}")
         return
 
-    thread_context = _get_thread_context(tweet)
+    if thread_context is None:
+        thread_context = _get_thread_context(tweet)
     memory_context = mem.get_memory_context()
 
     try:
@@ -133,7 +134,7 @@ def process_tweet(tweet: dict):
     )
 
 
-def score_tweet(tweet: dict):
+def score_tweet(tweet: dict, thread_context: list[dict] | None = None):
     if is_paused():
         return
 
@@ -151,7 +152,8 @@ def score_tweet(tweet: dict):
 
     tweet_text = tweet.get("text", "")
     author_handle = tweet.get("author_handle", "unknown")
-    thread_context = _get_thread_context(tweet)
+    if thread_context is None:
+        thread_context = _get_thread_context(tweet)
 
     try:
         result = score_glaze(tweet_text, author_handle, thread_context=thread_context)
@@ -178,17 +180,22 @@ def score_tweet(tweet: dict):
 
 
 def _handle_tweet(tweet: dict):
-    """Route tweet to score card (opinion) or regular reply (conversation)."""
+    """Fetch full thread context once, classify intent, then route to score card or reply."""
+    thread_context = _get_thread_context(tweet)
+
     try:
-        intent = classify_tweet_intent(tweet.get("text", ""), tweet.get("author_handle", ""))
+        intent = classify_tweet_intent(
+            tweet.get("text", ""), tweet.get("author_handle", ""),
+            thread_context=thread_context,
+        )
     except Exception as e:
         logger.warning(f"Intent classification failed for {tweet['id']}: {e} — defaulting to reply")
         intent = "conversation"
 
     if intent == "opinion":
-        score_tweet(tweet)
+        score_tweet(tweet, thread_context=thread_context)
     else:
-        process_tweet(tweet)
+        process_tweet(tweet, thread_context=thread_context)
 
 
 def poll_mentions():
