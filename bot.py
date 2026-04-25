@@ -22,10 +22,10 @@ MAX_REPLIES_PER_DAY = int(os.environ.get("MAX_REPLIES_PER_DAY", "50"))
 MAX_REPLIES_PER_ACCOUNT_HOUR = int(os.environ.get("MAX_REPLIES_PER_ACCOUNT_HOUR", "5"))
 
 STREAM_KEYWORDS = [
-    "Printr", "$belief", "$ooo", "$rotus", "$fatchoi", "$deployr",
-    "$patapim", "$roi", "$noob", "$print", "POB", "$cmyk", "$pve",
-    "$ket", "$fsjal", "$marmot", "Belief",
-    "pump.fun", "pumpfun", "pump fun", "$pump",
+    "$belief", "$ooo", "$rotus", "$fatchoi", "$deployr",
+    "$patapim", "$roi", "$noob", "$print", "$cmyk", "$pve",
+    "$ket", "$fsjal", "$marmot",
+    "pump.fun", "pumpfun",
 ]
 
 _list_poll_since_id: str | None = None
