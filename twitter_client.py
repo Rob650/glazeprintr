@@ -387,6 +387,12 @@ class GlazePrintrStream(tweepy.StreamingClient):
         if tweet is None:
             return
 
+        # Skip tweets with restricted reply settings — we'd get a 403 anyway.
+        reply_settings = getattr(tweet, "reply_settings", "everyone")
+        if reply_settings and reply_settings != "everyone":
+            logger.debug(f"Skipping tweet {tweet.id} — reply_settings={reply_settings}")
+            return
+
         users = {}
         if response.includes and "users" in response.includes:
             for u in response.includes["users"]:

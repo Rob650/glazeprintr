@@ -4,6 +4,7 @@ import logging
 import random
 import re
 import threading
+import time
 from datetime import datetime, timezone, timedelta
 
 from database import (
@@ -397,14 +398,36 @@ async def post_original_tweet():
         logger.error(f"Original tweet job error: {e}")
 
 
+# Token-bucket rate limiter for stream processing: max 3 tweets per 60s window.
+# This prevents runaway API spend when the stream matches many tweets in a burst.
+_stream_tokens: float = 3.0
+_stream_token_last_refill: float = 0.0
+STREAM_TOKENS_MAX = 3
+STREAM_TOKEN_REFILL_RATE = 3 / 60  # tokens per second (3 per minute)
+
+
 def _stream_callback(tweet: dict):
+    global _stream_tokens, _stream_token_last_refill
+
     if is_paused():
         return
+
+    # Refill tokens based on elapsed time
+    now = time.monotonic()
+    elapsed = now - _stream_token_last_refill
+    _stream_token_last_refill = now
+    _stream_tokens = min(STREAM_TOKENS_MAX, _stream_tokens + elapsed * STREAM_TOKEN_REFILL_RATE)
+
+    if _stream_tokens < 1.0:
+        return  # Rate-throttled — drop this stream tweet
+
     if not _is_recent_tweet(tweet, MAX_STREAM_AGE_MINUTES):
         age = _tweet_age_minutes(tweet)
         age_str = f"{age:.1f}" if age is not None else "unknown"
         logger.info(f"SKIPPING stream tweet {tweet.get('id')} — too old ({age_str} minutes, max {MAX_STREAM_AGE_MINUTES})")
         return
+
+    _stream_tokens -= 1.0
     _handle_tweet(tweet)
 
 
@@ -427,7 +450,7 @@ def start_stream():
         try:
             set_stream_status("connected")
             _stream_instance.filter(
-                tweet_fields=["author_id", "created_at", "text", "referenced_tweets"],
+                tweet_fields=["author_id", "created_at", "text", "referenced_tweets", "reply_settings"],
                 expansions=["author_id", "referenced_tweets.id"],
                 user_fields=["username"],
                 threaded=False,
