@@ -138,7 +138,7 @@ def fetch_mentions(since_id: str | None = None) -> list[dict]:
 
 
 def _append_prayer(text: str) -> str:
-    return text if text.rstrip().endswith("🙏") else text.rstrip() + " 🙏"
+    return text if text.rstrip().endswith("🙏") else text.rstrip() + "\n\n🙏"
 
 
 def post_reply(reply_text: str, in_reply_to_tweet_id: str, media_path: str | None = None) -> str | None:
