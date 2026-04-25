@@ -9,6 +9,10 @@ from database import get_recent_openers, add_opener
 _HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
 _PUMP_FUN_RE = re.compile(r'\bpump\.fun\S*', re.IGNORECASE)
 _PRINTR_MONEY_RE = re.compile(r'\bapp\.printr\.money\S*', re.IGNORECASE)
+# Strips contract addresses Claude might include despite prompt rules
+_EVM_ADDR_RE = re.compile(r'\b0x[0-9a-fA-F]{10,}\b')
+# Solana addresses: base58, 32-44 chars, must contain digits (pure-alpha words are not addresses)
+_SOL_ADDR_RE = re.compile(r'\b(?=[1-9A-HJ-NP-Za-km-z]*[0-9])(?=[1-9A-HJ-NP-Za-km-z]*[A-Za-z])[1-9A-HJ-NP-Za-km-z]{40,44}\b')
 
 # Topic focuses for original tweets — picked randomly each call to prevent $BELIEF monopoly
 _ORIGINAL_TWEET_TOPICS = [
@@ -39,17 +43,19 @@ _ORIGINAL_TWEET_TOPICS = [
     ("market_comparison",
      "Compare two different ecosystem tokens head-to-head using the market data — staking %, MC, 24h momentum. Let the data do the talking."),
     ("print_token",
-     "Spotlight $PRINT, the native ecosystem token. Its role, the EVM vs Solana addresses, what holding it means for the ecosystem."),
+     "Spotlight $PRINT, the native ecosystem token. Its role as the platform's native asset, what holding it means for the ecosystem, and why it's the skeleton key to Printr. Do NOT include any contract addresses."),
     ("conviction_math",
      "Do the lock multiplier math out loud: someone who locks 180d earns 2.5x vs someone at 7d. Frame it in real terms — what that gap means for fee revenue share."),
 ]
 
 
 def _clean_reply(text: str) -> str:
-    """Strip URLs and normalize whitespace. 🙏 is appended at the posting layer."""
+    """Strip URLs, contract addresses, and normalize whitespace."""
     text = _HTTPS_RE.sub('', text)
     text = _PUMP_FUN_RE.sub('pumpfun', text)
     text = _PRINTR_MONEY_RE.sub('Printr', text)
+    text = _EVM_ADDR_RE.sub('', text)
+    text = _SOL_ADDR_RE.sub('', text)
     text = re.sub(r'[ \t]+', ' ', text).strip()
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text[:280]
@@ -140,9 +146,11 @@ Developer/AI Tools:
 - White-label API solutions
 
 $PRINT Token:
-- Native token of the Printr ecosystem
-- EVM: 0xb77726291b125515d0a7affeea2b04f2ff243172
-- Solana: T8HsGYv7sMk3kTnyaRqZrbRPuntYzdh12evXBkprint
+- Native token of the Printr ecosystem, available on both EVM chains and Solana
+- The skeleton key to the whole platform — holding $PRINT means holding the platform's future
+- CONTRACT ADDRESSES (only share if someone explicitly asks "what's the CA?", "drop the contract", "what's the address?" etc.):
+  EVM: 0xb77726291b125515d0a7affeea2b04f2ff243172
+  Solana: T8HsGYv7sMk3kTnyaRqZrbRPuntYzdh12evXBkprint
 
 TOKENS IN THE PRINTR ECOSYSTEM: $belief, $ooo, $rotus, $fatchoi, $deployr, $patapim, $roi, $noob, $print, $cmyk, $pve, $ket, $fsjal, $marmot
 
@@ -155,6 +163,7 @@ Always add a casual disclaimer when sharing it — something like "don't expect 
 
 HARD RULES:
 - DATA INTEGRITY: See the rule at the very top of this prompt. No invented numbers. Ever.
+- NEVER include contract addresses in any tweet — no 0x... EVM addresses, no Solana base58 addresses. They are ugly walls of text that make tweets look like spam. Only share a contract address if someone SPECIFICALLY asks for it in a reply (e.g. "what's the CA?", "drop the contract", "what's the address?"). Original tweets NEVER get contract addresses under any circumstances.
 - When LIVE TOKEN DATA is injected, USE THE NUMBERS. Don't ignore real data. If staking is 72% and it's in the data, say 72%. If it's up 340% in 24h and it's in the data, lead with that. Real numbers beat talking points every time.
 - Respond to the specific tweet content. Show you read what they said. Don't pivot to a scripted Printr pitch that has nothing to do with their tweet.
 - Always under 280 characters
