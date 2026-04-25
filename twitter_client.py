@@ -2,6 +2,8 @@ import os
 import tweepy
 import logging
 
+from database import set_stream_status
+
 logger = logging.getLogger(__name__)
 
 os.environ.setdefault("X_CONSUMER_KEY", "ktEoKBEXfP1lbbX28me3G8A6S")
@@ -275,6 +277,8 @@ class GlazePrintrStream(tweepy.StreamingClient):
 
     def on_errors(self, errors):
         logger.error(f"Stream error: {errors}")
+        set_stream_status("disconnected")
 
     def on_connection_error(self):
         logger.error("Stream connection error")
+        set_stream_status("disconnected")

@@ -23,6 +23,12 @@ ENABLE_STREAM = os.environ.get("ENABLE_STREAM", "true").lower() == "true"
 scheduler = AsyncIOScheduler()
 
 
+def _watchdog_stream():
+    if not bot.stream_is_alive():
+        logger.warning("Stream watchdog: stream dead, restarting...")
+        bot.start_stream()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     database.init_db()
@@ -31,6 +37,8 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(bot.poll_list, "interval", minutes=5, id="list_poller", replace_existing=True)
     scheduler.add_job(bot.poll_mentions, "interval", minutes=5, id="mentions_poller", replace_existing=True)
     scheduler.add_job(bot.post_original_tweet, "interval", hours=2, id="original_tweeter", replace_existing=True)
+    if ENABLE_STREAM:
+        scheduler.add_job(_watchdog_stream, "interval", minutes=2, id="stream_watchdog", replace_existing=True)
     scheduler.start()
     logger.info("Schedulers started: list poller (5 min), mentions poller (5 min), original tweets (2 hr)")
 
@@ -200,6 +208,17 @@ async def api_trigger_tweet():
     logger.info("Manual original tweet trigger via API")
     asyncio.create_task(bot.post_original_tweet())
     return {"status": "triggered", "dry_run": DRY_RUN}
+
+
+@app.post("/api/restart-stream")
+async def api_restart_stream():
+    if not ENABLE_STREAM:
+        return {"status": "stream disabled"}
+    bot.stop_stream()
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, bot.start_stream)
+    logger.info("Stream restart triggered via API")
+    return {"status": "restarting"}
 
 
 @app.get("/health")

@@ -292,9 +292,9 @@ def start_stream():
     )
 
     def _run():
-        set_stream_status("connected")
-        logger.info("Filtered stream started")
+        logger.info("Filtered stream starting...")
         try:
+            set_stream_status("connected")
             _stream_instance.filter(
                 tweet_fields=["author_id", "text", "referenced_tweets"],
                 expansions=["author_id", "referenced_tweets.id"],
