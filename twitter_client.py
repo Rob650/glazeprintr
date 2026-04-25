@@ -16,7 +16,9 @@ os.environ.setdefault("X_ACCESS_TOKEN_SECRET", "MS4UTY7G9S8QW7KgLTdELDAfZabGBR7d
 os.environ.setdefault("X_CLIENT_ID", "RzVrN2tVbmtaYnBvV3J5TzZvUmY6MTpjaQ")
 os.environ.setdefault("X_CLIENT_SECRET", "63hVNoMiHwRNbbI8-uwIJikLSX138Nuo_iptr1Ix9mAzGD4kXd")
 
-_URL_RE = re.compile(r'https?://\S+|\bapp\.printr\.money\S*|\bpump\.fun\S*', re.IGNORECASE)
+_HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+_PUMP_FUN_RE = re.compile(r'\bpump\.fun\S*', re.IGNORECASE)
+_PRINTR_MONEY_RE = re.compile(r'\bapp\.printr\.money\S*', re.IGNORECASE)
 
 BOT_HANDLE = os.environ.get("BOT_HANDLE", "printrglazr")
 SKIP_HANDLES = {BOT_HANDLE.lower(), "printr_money"}
@@ -146,7 +148,9 @@ def fetch_mentions(since_id: str | None = None) -> list[dict]:
 
 def _clean_tweet(text: str) -> str:
     """Strip URLs, normalize whitespace, ensure ends with \\n\\n🙏, truncate to 280 chars."""
-    text = _URL_RE.sub('', text)
+    text = _HTTPS_RE.sub('', text)
+    text = _PUMP_FUN_RE.sub('pumpfun', text)
+    text = _PRINTR_MONEY_RE.sub('Printr', text)
     text = re.sub(r'[ \t]+', ' ', text).strip()
     text = re.sub(r'\n{3,}', '\n\n', text)
     if not text.rstrip().endswith('🙏'):

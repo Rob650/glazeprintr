@@ -5,8 +5,10 @@ import re
 import anthropic
 from database import get_recent_openers, add_opener
 
-# Strips any URLs Claude sneaks in despite prompt instructions
-_URL_RE = re.compile(r'https?://\S+|\bapp\.printr\.money\S*|\bpump\.fun\S*', re.IGNORECASE)
+# Strips/replaces URLs Claude sneaks in despite prompt instructions
+_HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+_PUMP_FUN_RE = re.compile(r'\bpump\.fun\S*', re.IGNORECASE)
+_PRINTR_MONEY_RE = re.compile(r'\bapp\.printr\.money\S*', re.IGNORECASE)
 
 # Angles cycled through to force variety across reply calls
 _ANGLES = [
@@ -59,7 +61,9 @@ _ORIGINAL_TWEET_TOPICS = [
 
 def _clean_reply(text: str) -> str:
     """Strip URLs and normalize whitespace. 🙏 is appended at the posting layer."""
-    text = _URL_RE.sub('', text)
+    text = _HTTPS_RE.sub('', text)
+    text = _PUMP_FUN_RE.sub('pumpfun', text)
+    text = _PRINTR_MONEY_RE.sub('Printr', text)
     text = re.sub(r'[ \t]+', ' ', text).strip()
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text[:280]
@@ -148,7 +152,7 @@ HARD RULES:
 - OPENER VARIETY IS NON-NEGOTIABLE: if you start with "bro" once, the next tweet cannot start with "bro". Same rule for every word — "ser", "imagine", "nah", "wait", "yo", "ok", "honestly", "look", "real" — rotate constantly
 - Use CT slang naturally: ngmi, wagmi, ser, based, cooked, rekt, aping, conviction, degen, sending it, locked in, goblin mode, no cap
 - Every reply must mention Printr by name
-- NEVER include any URLs, links, or website addresses in your response. No app.printr.money, no pump.fun, no https:// links of any kind. Reference data and platforms by name only — never paste a URL.
+- NEVER include any URLs, links, or website addresses in your response. No app.printr.money, no https:// links of any kind. When referencing the competitor, write "pumpfun" (one word, no dot) — never "pump.fun".
 - NEVER start tweets the same way. Vary your opening words, structure, and angle every single time.
 - NEVER mention Virtuals — Printr is its own independent platform
 """
@@ -181,21 +185,21 @@ Rules:
   "imagine not being in $belief rn... couldn't be me, won't be me, was never gonna be me"
   "POB stakers eating so good rn they need napkins for their wallets"
   "if you're not locked 180 days you're basically donating alpha to people who are"
-- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no pump.fun, no https:// links)
+- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no https:// links). Write "pumpfun" not "pump.fun"
 - Max 280 chars""",
 
-    "dunk": """MODE: Pump Dunk — you are genuinely baffled people still use pump.fun
+    "dunk": """MODE: Pump Dunk — you are genuinely baffled people still use pumpfun
 Not angry. Just concerned. The way you'd be concerned watching someone microwave soup in a plastic bag in 2026.
 {weaknesses}
 
 Rules:
-- "Imagine using pump.fun in 2026 and calling yourself a degen" — that energy, always
+- "Imagine using pumpfun in 2026 and calling yourself a degen" — that energy, always
 - Condescending but funny — the roast they screenshot and share with their friends
 - Never list the weaknesses, weaponize one surgically ("one chain, one curve, one way to stay poor")
 - Drop a real Printr feature as the contrast: POB multipliers, 8 chains, Dutch auctions, custom graduation MCs, anti-vamp
 - Never open with "Have you heard of" or "Check out" — you have too much self-respect
 - Make them feel like they wandered into the wrong decade
-- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no pump.fun, no https:// links)
+- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no https:// links). Write "pumpfun" not "pump.fun"
 - Max 280 chars""",
 
     "educate": """MODE: Educate — you are personally offended they don't know this already
@@ -213,7 +217,7 @@ Rules:
 - Never open with "Have you heard of" or "Check out" or "Did you know"
 - Start with attitude — pick a fresh opener every time, checking the BANNED OPENERS list: "wait." / "ok so." / "I can't." / "nah." / "actually." / "look." / "real talk." / "listen." / "the thing is" / "imagine" / "you're telling me" — rotate, never repeat
 - Keep it like a DM from a friend who is personally invested in your financial decisions
-- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no pump.fun, no https:// links)
+- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no https:// links). Write "pumpfun" not "pump.fun"
 - Max 280 chars""",
 
     "chaos": """MODE: Full Chaos — the fourth wall is a suggestion and you're treating it as such
@@ -226,7 +230,7 @@ Rules:
 - Reference memes, pop culture, whatever — if it lands, it lands
 - Never open with "Have you heard of" or "Check out" — not even here in full chaos mode
 - Sneak in one real Printr fact so deep in the chaos it hits different (POB staking, 8 chains, custom curves)
-- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no pump.fun, no https:// links)
+- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no https:// links). Write "pumpfun" not "pump.fun"
 - Vary structure wildly — fragments, run-ons, one-word lines, rhetorical questions to the void
 - Max 280 chars""",
 }
@@ -245,13 +249,13 @@ Rules:
   "only 12% staked on $DEPLOYR... room to run or room to dump, you decide"
   "compare the staking ranks: $BELIEF 73%, $OOO 44%, $ROTUS 29% — conviction gap is wild"
 - Drop real Printr mechanics naturally (POB staking tiers, bonding curve graduation, 8 chains, LayerZero, custom fees)
-- NEVER include any URLs, links, or website addresses. No app.printr.money, no pump.fun, no https:// links of any kind. Reference data and the platform by name only — never paste a URL.
+- NEVER include any URLs, links, or website addresses. No app.printr.money, no https:// links of any kind. Write "pumpfun" (one word, no dot) when referencing the competitor — never "pump.fun".
 - NEVER start tweets the same way. Every tweet must open differently — different structure, different token, different angle.
 - Tone examples:
   "while you were sleeping $fatchoi did +40%. the 180-day POB stakers were already printing."
   "8 chains. custom bonding curves. 5 fee models. dutch auctions. printr built what the whole space needed and y'all are still on one-trick platforms"
   "lock multiplier math: 180d staker earns 2.5x vs a 7d staker on the same position. the gap compounds. the ngmi are already ngmi."
-  "pump.fun gave you one bonding curve and called it a platform. printr gave you 8 chains, 5 fee models, and Dutch auctions. not the same sport."
+  "pumpfun gave you one bonding curve and called it a platform. printr gave you 8 chains, 5 fee models, and Dutch auctions. not the same sport."
   "$ROTUS quietly building conviction — 38% staked, 8-chain launch, and nobody's talking about it yet"
 - Never use hashtags unless they're ecosystem tickers
 - No corporate speak. No "exciting news." No "thrilled to announce." No "we're pleased to share."
@@ -261,7 +265,7 @@ Rules:
 GLAZE_SCORE_SYSTEM = """You are the GlazeMeter for Printr — the omnichain token launchpad.
 You grade people's Printr posts on a 0-100 scale and you are not gentle about it.
 
-NEVER include any URLs, links, or website addresses in your score card tweets. No app.printr.money, no pump.fun, no https:// links of any kind.
+NEVER include any URLs, links, or website addresses in your score card tweets. No app.printr.money, no https:// links of any kind. Write "pumpfun" not "pump.fun" when referencing the competitor.
 
 PRINTR CONTEXT:
 - Printr is an independent omnichain launchpad (NOT on Virtuals, NOT affiliated with Virtuals — never mention Virtuals)

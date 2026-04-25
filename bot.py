@@ -3,14 +3,12 @@ import asyncio
 import logging
 import random
 import re
-import threading
-import time
 from datetime import datetime, timezone, timedelta
 
 from database import (
     has_replied, record_reply, count_replies_today,
     count_replies_to_account_last_hour, is_paused,
-    set_stream_status, has_scored, record_score, count_scores_today,
+    has_scored, record_score, count_scores_today,
     record_original_tweet, has_replied_mention, record_replied_mention,
     get_mentions_since_id, set_mentions_since_id,
     get_list_since_id, set_list_since_id,
@@ -22,7 +20,7 @@ from claude_client import (
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
-    setup_stream_rules, GlazePrintrStream, fetch_tweet_chain, fetch_tweet_media_url,
+    fetch_tweet_chain, fetch_tweet_media_url,
 )
 from image_generator import (
     generate_glaze_score_card, generate_ecosystem_stats_card, remix_tweet_image,
@@ -38,25 +36,14 @@ MAX_REPLIES_PER_DAY = int(os.environ.get("MAX_REPLIES_PER_DAY", "200"))
 MAX_REPLIES_PER_ACCOUNT_HOUR = int(os.environ.get("MAX_REPLIES_PER_ACCOUNT_HOUR", "5"))
 MAX_SCORES_PER_DAY = int(os.environ.get("MAX_SCORES_PER_DAY", "20"))
 
-STREAM_KEYWORDS = [
-    "$belief", "$ooo", "$rotus", "$fatchoi", "$deployr",
-    "$patapim", "$roi", "$noob", "$print", "$cmyk", "$pve",
-    "$ket", "$fsjal", "$marmot",
-    "pump.fun", "pumpfun",
-    "printr",
-]
-
 _list_poll_since_id: str | None = None
 _list_poll_since_id_loaded: bool = False
 _mentions_since_id: str | None = None
 _mentions_since_id_loaded: bool = False
-_stream_thread: threading.Thread | None = None
-_stream_instance: GlazePrintrStream | None = None
 
 SKIP_HANDLES = {"printrglazr", "printr_money"}
 MAX_MENTION_AGE_MINUTES = 120
 MAX_LIST_AGE_HOURS = 1
-MAX_STREAM_AGE_MINUTES = 5
 
 # Probability of attaching images (40% of eligible tweets get images)
 IMAGE_ORIGINAL_PROB = 0.40
@@ -397,81 +384,3 @@ async def post_original_tweet():
     except Exception as e:
         logger.error(f"Original tweet job error: {e}")
 
-
-# Token-bucket rate limiter for stream processing: max 3 tweets per 60s window.
-# This prevents runaway API spend when the stream matches many tweets in a burst.
-_stream_tokens: float = 3.0
-_stream_token_last_refill: float = 0.0
-STREAM_TOKENS_MAX = 3
-STREAM_TOKEN_REFILL_RATE = 3 / 60  # tokens per second (3 per minute)
-
-
-def _stream_callback(tweet: dict):
-    global _stream_tokens, _stream_token_last_refill
-
-    if is_paused():
-        return
-
-    # Refill tokens based on elapsed time
-    now = time.monotonic()
-    elapsed = now - _stream_token_last_refill
-    _stream_token_last_refill = now
-    _stream_tokens = min(STREAM_TOKENS_MAX, _stream_tokens + elapsed * STREAM_TOKEN_REFILL_RATE)
-
-    if _stream_tokens < 1.0:
-        return  # Rate-throttled — drop this stream tweet
-
-    if not _is_recent_tweet(tweet, MAX_STREAM_AGE_MINUTES):
-        age = _tweet_age_minutes(tweet)
-        age_str = f"{age:.1f}" if age is not None else "unknown"
-        logger.info(f"SKIPPING stream tweet {tweet.get('id')} — too old ({age_str} minutes, max {MAX_STREAM_AGE_MINUTES})")
-        return
-
-    _stream_tokens -= 1.0
-    _handle_tweet(tweet)
-
-
-def start_stream():
-    global _stream_instance, _stream_thread
-
-    if _stream_thread and _stream_thread.is_alive():
-        logger.info("Stream already running")
-        return
-
-    setup_stream_rules(STREAM_KEYWORDS)
-
-    _stream_instance = GlazePrintrStream(
-        on_tweet_callback=_stream_callback,
-        wait_on_rate_limit=True,
-    )
-
-    def _run():
-        logger.info("Filtered stream starting...")
-        try:
-            set_stream_status("connected")
-            _stream_instance.filter(
-                tweet_fields=["author_id", "created_at", "text", "referenced_tweets", "reply_settings"],
-                expansions=["author_id", "referenced_tweets.id"],
-                user_fields=["username"],
-                threaded=False,
-            )
-        except Exception as e:
-            logger.error(f"Stream crashed: {e}")
-        finally:
-            set_stream_status("disconnected")
-            logger.info("Stream stopped")
-
-    _stream_thread = threading.Thread(target=_run, daemon=True, name="glazeprintr-stream")
-    _stream_thread.start()
-
-
-def stop_stream():
-    global _stream_instance
-    if _stream_instance:
-        _stream_instance.disconnect()
-        set_stream_status("disconnected")
-        logger.info("Stream disconnected")
-
-
-def stream_is_alive() -> bool:
-    return _stream_thread is not None and _stream_thread.is_alive()
