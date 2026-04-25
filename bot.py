@@ -333,6 +333,10 @@ def poll_list():
                 age_str = f"{age:.1f}" if age is not None else "no timestamp"
                 logger.info(f"SKIPPING list tweet {tweet['id']} — too old ({age_str} minutes, max {MAX_LIST_AGE_HOURS}h)")
                 continue
+            if has_replied_mention(tweet["id"]):
+                logger.debug(f"List tweet {tweet['id']} already claimed — skip")
+                continue
+            record_replied_mention(tweet["id"], tweet.get("author_id", ""))
             _handle_tweet(tweet)
 
 
