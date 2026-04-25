@@ -36,11 +36,11 @@ async def lifespan(app: FastAPI):
 
     scheduler.add_job(bot.poll_list, "interval", minutes=5, id="list_poller", replace_existing=True)
     scheduler.add_job(bot.poll_mentions, "interval", minutes=5, id="mentions_poller", replace_existing=True)
-    scheduler.add_job(bot.post_original_tweet, "interval", hours=2, id="original_tweeter", replace_existing=True)
+    scheduler.add_job(bot.post_original_tweet, "interval", minutes=10, id="original_tweeter", replace_existing=True)
     if ENABLE_STREAM:
         scheduler.add_job(_watchdog_stream, "interval", minutes=2, id="stream_watchdog", replace_existing=True)
     scheduler.start()
-    logger.info("Schedulers started: list poller (5 min), mentions poller (5 min), original tweets (2 hr)")
+    logger.info("Schedulers started: list poller (5 min), mentions poller (5 min), original tweets (10 min)")
 
     if ENABLE_STREAM:
         loop = asyncio.get_event_loop()
