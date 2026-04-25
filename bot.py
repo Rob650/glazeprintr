@@ -210,6 +210,7 @@ async def post_original_tweet():
                     market_cap=proj.get("market_cap"),
                     price_change_24h=proj.get("price_change_24h"),
                     liquidity=proj.get("liquidity"),
+                    staking_pct=proj.get("staking_pct"),
                 )
 
         memory_context = mem.get_memory_context()

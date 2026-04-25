@@ -40,8 +40,8 @@ def _extract_narratives(text: str):
             store_narrative(f"${token} trending", strength=1)
 
 
-def remember_project_data(project_name: str, contract_address: str, **kwargs):
-    store_project_data(project_name, contract_address, **kwargs)
+def remember_project_data(project_name: str, contract_address: str, staking_pct: float = None, **kwargs):
+    store_project_data(project_name, contract_address, staking_pct=staking_pct, **kwargs)
 
 
 def get_memory_context(include_tweets: bool = True, include_projects: bool = True,
@@ -62,6 +62,7 @@ def get_memory_context(include_tweets: bool = True, include_projects: bool = Tru
                 mc = p.get("market_cap") or 0
                 chg = p.get("price_change_24h")
                 vol = p.get("volume") or 0
+                staking_pct = p.get("staking_pct")
                 line = f"${p['project_name'].upper()}"
                 if mc:
                     line += f" MC=${mc / 1_000_000:.2f}M" if mc >= 1_000_000 else f" MC=${mc:,.0f}"
@@ -69,6 +70,8 @@ def get_memory_context(include_tweets: bool = True, include_projects: bool = Tru
                     line += f" ({chg:+.1f}%24h)"
                 if vol:
                     line += f" Vol=${vol / 1000:.0f}k" if vol >= 1000 else f" Vol=${vol:.0f}"
+                if staking_pct is not None:
+                    line += f" POBstaked={staking_pct:.0f}%"
                 proj_lines.append(line)
             parts.append("LATEST MARKET DATA:\n" + "\n".join(proj_lines))
 

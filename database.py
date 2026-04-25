@@ -24,6 +24,13 @@ def db():
 
 def init_db():
     with db() as conn:
+        # Migrate existing databases that predate the staking_pct column
+        try:
+            conn.execute("ALTER TABLE memory_project_data ADD COLUMN staking_pct REAL")
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS replied_tweets (
                 tweet_id TEXT PRIMARY KEY,
@@ -63,6 +70,7 @@ def init_db():
                 market_cap REAL,
                 price_change_24h REAL,
                 liquidity REAL,
+                staking_pct REAL,
                 source TEXT DEFAULT 'dexscreener',
                 created_at TEXT DEFAULT (datetime('now'))
             );
@@ -207,15 +215,15 @@ def get_recent_tweet_summaries(limit: int = 20) -> list[dict]:
 def store_project_data(project_name: str, contract_address: str, price: float = None,
                        volume: float = None, market_cap: float = None,
                        price_change_24h: float = None, liquidity: float = None,
-                       source: str = "dexscreener"):
+                       staking_pct: float = None, source: str = "dexscreener"):
     with db() as conn:
         conn.execute(
             """INSERT INTO memory_project_data
                (project_name, contract_address, price, volume, market_cap,
-                price_change_24h, liquidity, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                price_change_24h, liquidity, staking_pct, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (project_name, contract_address, price, volume, market_cap,
-             price_change_24h, liquidity, source)
+             price_change_24h, liquidity, staking_pct, source)
         )
 
 
@@ -223,7 +231,7 @@ def get_latest_project_data(limit: int = 20) -> list[dict]:
     with db() as conn:
         rows = conn.execute(
             """SELECT project_name, contract_address, price, volume, market_cap,
-                      price_change_24h, liquidity, source, MAX(created_at) as created_at
+                      price_change_24h, liquidity, staking_pct, source, MAX(created_at) as created_at
                FROM memory_project_data
                GROUP BY project_name
                ORDER BY market_cap DESC
