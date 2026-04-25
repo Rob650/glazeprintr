@@ -362,6 +362,7 @@ class GlazePrintrStream(tweepy.StreamingClient):
             "author_id": str(tweet.author_id) if tweet.author_id else "",
             "author_handle": "stream_user",
             "in_reply_to_tweet_id": in_reply_to_tweet_id,
+            "created_at": getattr(tweet, "created_at", None),
         })
 
     def on_errors(self, errors):

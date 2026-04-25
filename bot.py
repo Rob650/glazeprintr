@@ -52,7 +52,8 @@ _stream_instance: GlazePrintrStream | None = None
 
 SKIP_HANDLES = {"printrglazr", "printr_money"}
 MAX_MENTION_AGE_MINUTES = 10
-MAX_LIST_AGE_HOURS = 24
+MAX_LIST_AGE_HOURS = 1
+MAX_STREAM_AGE_MINUTES = 5
 
 # Probability of attaching images (40% of eligible tweets get images)
 IMAGE_ORIGINAL_PROB = 0.40
@@ -89,14 +90,22 @@ def _get_token_metrics(token_name: str) -> dict | None:
     return None
 
 
-def _is_recent_tweet(tweet: dict, max_age_minutes: int) -> bool:
+def _tweet_age_minutes(tweet: dict) -> float | None:
     created_at = tweet.get("created_at")
     if not created_at:
-        return True  # no timestamp — let it through rather than silently drop
+        return None
     if isinstance(created_at, str):
         created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
-    return created_at >= cutoff
+    return (datetime.now(timezone.utc) - created_at).total_seconds() / 60
+
+
+def _is_recent_tweet(tweet: dict, max_age_minutes: int) -> bool:
+    age = _tweet_age_minutes(tweet)
+    if age is None:
+        # No timestamp on stream tweets means we can't verify age — reject to be safe
+        logger.warning(f"Tweet {tweet.get('id')} has no created_at — SKIPPING (no timestamp)")
+        return False
+    return age <= max_age_minutes
 
 
 def _should_skip_reply(tweet: dict) -> tuple[bool, str]:
@@ -298,7 +307,9 @@ def poll_mentions():
                 logger.debug(f"Mention {tweet['id']} already processed — skip")
                 continue
             if not _is_recent_tweet(tweet, MAX_MENTION_AGE_MINUTES):
-                logger.debug(f"Mention {tweet['id']} is older than {MAX_MENTION_AGE_MINUTES}m — skip")
+                age = _tweet_age_minutes(tweet)
+                age_str = f"{age:.1f}" if age is not None else "no timestamp"
+                logger.info(f"SKIPPING mention {tweet['id']} — too old ({age_str} minutes, max {MAX_MENTION_AGE_MINUTES})")
                 record_replied_mention(tweet["id"], tweet.get("author_id", ""))
                 continue
             record_replied_mention(tweet["id"], tweet.get("author_id", ""))
@@ -318,7 +329,9 @@ def poll_list():
         _list_poll_since_id = tweets[0]["id"]
         for tweet in tweets:
             if not _is_recent_tweet(tweet, MAX_LIST_AGE_HOURS * 60):
-                logger.debug(f"List tweet {tweet['id']} is older than {MAX_LIST_AGE_HOURS}h — skip")
+                age = _tweet_age_minutes(tweet)
+                age_str = f"{age:.1f}" if age is not None else "no timestamp"
+                logger.info(f"SKIPPING list tweet {tweet['id']} — too old ({age_str} minutes, max {MAX_LIST_AGE_HOURS}h)")
                 continue
             _handle_tweet(tweet)
 
@@ -373,6 +386,13 @@ async def post_original_tweet():
 
 
 def _stream_callback(tweet: dict):
+    if is_paused():
+        return
+    if not _is_recent_tweet(tweet, MAX_STREAM_AGE_MINUTES):
+        age = _tweet_age_minutes(tweet)
+        age_str = f"{age:.1f}" if age is not None else "unknown"
+        logger.info(f"SKIPPING stream tweet {tweet.get('id')} — too old ({age_str} minutes, max {MAX_STREAM_AGE_MINUTES})")
+        return
     _handle_tweet(tweet)
 
 
@@ -395,7 +415,7 @@ def start_stream():
         try:
             set_stream_status("connected")
             _stream_instance.filter(
-                tweet_fields=["author_id", "text", "referenced_tweets"],
+                tweet_fields=["author_id", "created_at", "text", "referenced_tweets"],
                 expansions=["author_id", "referenced_tweets.id"],
                 user_fields=["username"],
                 threaded=False,
