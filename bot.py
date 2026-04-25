@@ -19,11 +19,12 @@ from claude_client import (
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
-    fetch_tweet_chain, fetch_tweet_media_url,
+    fetch_tweet_chain,
 )
-from image_generator import (
-    generate_glaze_score_card, generate_ecosystem_stats_card, remix_tweet_image,
-)
+# image generation disabled
+# from image_generator import (
+#     generate_glaze_score_card, generate_ecosystem_stats_card, remix_tweet_image,
+# )
 import memory as mem
 from scraper import scrape_all_data, fetch_token_data_sync
 
@@ -45,10 +46,6 @@ _mentions_since_id_was_fresh: bool = False  # True when DB was wiped (since_id n
 SKIP_HANDLES = {"printrglazr", "printr_money"}
 MAX_MENTION_AGE_MINUTES = 120
 MAX_LIST_AGE_HOURS = 1
-
-# Probability of attaching images (40% of eligible tweets get images)
-IMAGE_ORIGINAL_PROB = 0.40
-IMAGE_REPLY_PROB = 0.40
 
 ECOSYSTEM_TOKENS = [
     "belief", "ooo", "rotus", "fatchoi", "deployr", "patapim",
@@ -207,18 +204,7 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
         logger.error(f"Claude error for tweet {tweet['id']}: {e}")
         return
 
-    # Optionally remix source image (40% chance, only if tweet has media)
-    img_path = None
-    if random.random() < IMAGE_REPLY_PROB:
-        source_media_url = tweet.get("media_url")
-        if not source_media_url and tweet.get("in_reply_to_tweet_id"):
-            source_media_url = fetch_tweet_media_url(tweet["in_reply_to_tweet_id"])
-        if source_media_url:
-            token = _extract_token(tweet_text)
-            try:
-                img_path = remix_tweet_image(source_media_url, token_name=token)
-            except Exception as e:
-                logger.debug(f"Meme remix failed: {e}")
+    img_path = None  # image generation disabled
 
     our_reply_id = None
     if DRY_RUN:
@@ -286,14 +272,8 @@ def score_tweet(tweet: dict, thread_context: list[dict] | None = None):
 
     score, tier, score_card = result
 
-    # Always generate a score card image
     token_name = _extract_token(tweet_text, score_card)
-    metrics = _get_token_metrics(token_name)
-    img_path = None
-    try:
-        img_path = generate_glaze_score_card(score, tier, token_name, score_card, metrics)
-    except Exception as e:
-        logger.warning(f"Score card image generation failed: {e}")
+    img_path = None  # image generation disabled
 
     if DRY_RUN:
         logger.info(
@@ -418,13 +398,7 @@ async def post_original_tweet():
         memory_context = mem.get_memory_context()
         tweet_text = generate_original_tweet(market_data=projects, memory_context=memory_context)
 
-        # 40% chance to attach ecosystem stats card
-        img_path = None
-        if random.random() < IMAGE_ORIGINAL_PROB:
-            try:
-                img_path = generate_ecosystem_stats_card(projects)
-            except Exception as e:
-                logger.warning(f"Ecosystem stats card failed: {e}")
+        img_path = None  # image generation disabled
 
         if DRY_RUN:
             logger.info(f"[DRY RUN] Original tweet img={'yes' if img_path else 'no'}: {tweet_text}")
