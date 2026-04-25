@@ -105,7 +105,7 @@ def fetch_mentions(since_id: str | None = None) -> list[dict]:
         kwargs["since_id"] = since_id
     else:
         # On cold start (no since_id), only fetch mentions from last 15 min to avoid old tweets
-        kwargs["start_time"] = datetime.now(timezone.utc) - timedelta(minutes=15)
+        kwargs["start_time"] = datetime.now(timezone.utc) - timedelta(hours=2)
 
     try:
         response = client.get_users_mentions(**kwargs)
