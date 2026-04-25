@@ -137,7 +137,7 @@ def record_reply(tweet_id: str, author_id: str, author_handle: str,
                  our_reply_tweet_id: str | None = None):
     with db() as conn:
         conn.execute(
-            """INSERT OR IGNORE INTO replied_tweets
+            """INSERT OR REPLACE INTO replied_tweets
                (tweet_id, author_id, author_handle, tweet_text, reply_text, mode, dry_run, our_reply_tweet_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (tweet_id, author_id, author_handle, tweet_text, reply_text, mode, int(dry_run), our_reply_tweet_id)
@@ -396,6 +396,27 @@ def record_replied_mention(tweet_id: str, user_id: str):
             "INSERT OR IGNORE INTO replied_mentions (tweet_id, user_id) VALUES (?, ?)",
             (tweet_id, user_id)
         )
+
+
+def try_claim_mention(tweet_id: str, user_id: str) -> bool:
+    """Atomically claim a tweet for processing. Returns True only for the first caller."""
+    with db() as conn:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO replied_mentions (tweet_id, user_id) VALUES (?, ?)",
+            (tweet_id, user_id)
+        )
+        return cursor.rowcount == 1
+
+
+def try_claim_reply(tweet_id: str) -> bool:
+    """Atomically pre-claim a slot in replied_tweets before posting.
+    Returns True if safe to post, False if already replied."""
+    with db() as conn:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO replied_tweets (tweet_id) VALUES (?)",
+            (tweet_id,)
+        )
+        return cursor.rowcount == 1
 
 
 # --- mentions since_id persistence ---

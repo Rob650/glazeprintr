@@ -257,7 +257,7 @@ def fetch_tweet_media_url(tweet_id: str) -> str | None:
     return None
 
 
-def fetch_list_tweets(list_id: str, since_id: str | None = None) -> list[dict]:
+def fetch_list_tweets(list_id: str) -> list[dict]:
     client = get_v2_client()
     kwargs = {
         "id": list_id,
@@ -267,8 +267,6 @@ def fetch_list_tweets(list_id: str, since_id: str | None = None) -> list[dict]:
         "user_fields": ["username"],
         "media_fields": ["url", "type", "preview_image_url"],
     }
-    if since_id:
-        kwargs["since_id"] = since_id
 
     try:
         response = client.get_list_tweets(**kwargs)

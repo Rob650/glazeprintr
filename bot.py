@@ -11,8 +11,8 @@ from database import (
     has_scored, record_score, count_scores_today,
     record_original_tweet, has_replied_mention, record_replied_mention,
     get_mentions_since_id, set_mentions_since_id,
-    get_list_since_id, set_list_since_id,
     has_replied_to_author_in_chain,
+    try_claim_mention, try_claim_reply,
 )
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
@@ -38,9 +38,7 @@ MAX_SCORES_PER_DAY = int(os.environ.get("MAX_SCORES_PER_DAY", "20"))
 
 _BOT_START_TIME = datetime.now(timezone.utc)
 
-_list_poll_since_id: str | None = None
-_list_poll_since_id_loaded: bool = False
-_list_since_id_was_fresh: bool = False  # True when DB was wiped (since_id not persisted)
+_list_poll_since_id: str | None = None  # in-memory only; List API doesn't support since_id
 
 _mentions_since_id: str | None = None
 _mentions_since_id_loaded: bool = False
@@ -238,6 +236,11 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
             f"mode={mode} img={'yes' if img_path else 'no'}: {reply_text[:80]}..."
         )
     else:
+        # Final safety net: atomically pre-claim the reply slot before posting.
+        # If another thread already claimed it, abort — no double reply under any circumstance.
+        if not try_claim_reply(tweet["id"]):
+            logger.warning(f"ABORT: reply slot for {tweet['id']} already claimed — double-reply prevented")
+            return
         our_reply_id = post_reply(reply_text, tweet["id"], media_path=img_path)
         if not our_reply_id:
             logger.warning(f"Failed to post reply to {tweet['id']}")
@@ -349,61 +352,51 @@ def poll_mentions():
         _mentions_since_id = str(max(int(t["id"]) for t in tweets))
         set_mentions_since_id(_mentions_since_id)
         for tweet in tweets:
-            if has_replied_mention(tweet["id"]):
-                logger.debug(f"Mention {tweet['id']} already processed — skip")
+            # Atomic claim — INSERT OR IGNORE returns rowcount=0 if already claimed.
+            # Prevents race with concurrent poll_list processing the same tweet.
+            if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
+                logger.debug(f"Mention {tweet['id']} already claimed — skip")
                 continue
             # Railway wipes SQLite on every deploy. If since_id was lost, we re-fetch
-            # old tweets whose replies are already posted. Silently claim them.
+            # old tweets whose replies are already posted. Silently claim (already done above).
             if _mentions_since_id_was_fresh and _tweet_predates_startup(tweet):
-                logger.info(f"Silently claiming pre-startup mention {tweet['id']} (fresh DB, avoiding double-reply)")
-                record_replied_mention(tweet["id"], tweet.get("author_id", ""))
+                logger.info(f"Silently claimed pre-startup mention {tweet['id']} (fresh DB, avoiding double-reply)")
                 continue
             if not _is_recent_tweet(tweet, MAX_MENTION_AGE_MINUTES):
                 age = _tweet_age_minutes(tweet)
                 age_str = f"{age:.1f}" if age is not None else "no timestamp"
                 logger.info(f"SKIPPING mention {tweet['id']} — too old ({age_str} minutes, max {MAX_MENTION_AGE_MINUTES})")
-                record_replied_mention(tweet["id"], tweet.get("author_id", ""))
                 continue
-            record_replied_mention(tweet["id"], tweet.get("author_id", ""))
             _handle_tweet(tweet)
 
 
 def poll_list():
-    global _list_poll_since_id, _list_poll_since_id_loaded, _list_since_id_was_fresh
+    global _list_poll_since_id
     if not X_LIST_ID:
         logger.warning("X_LIST_ID not set — list polling disabled")
         return
 
-    if not _list_poll_since_id_loaded:
-        _list_poll_since_id = get_list_since_id()
-        _list_poll_since_id_loaded = True
-        if _list_poll_since_id is None:
-            _list_since_id_was_fresh = True
-            logger.warning("list since_id not found in DB — DB may be fresh/wiped; will silence pre-startup tweets")
-
-    logger.info(f"Polling list {X_LIST_ID} since_id={_list_poll_since_id}")
-    tweets = fetch_list_tweets(X_LIST_ID, since_id=_list_poll_since_id)
+    # The Twitter List Tweets API does NOT support since_id — filtered client-side instead.
+    logger.info(f"Polling list {X_LIST_ID} (in-memory since_id={_list_poll_since_id})")
+    tweets = fetch_list_tweets(X_LIST_ID)
 
     if tweets:
-        _list_poll_since_id = str(max(int(t["id"]) for t in tweets))
-        set_list_since_id(_list_poll_since_id)
+        max_id = str(max(int(t["id"]) for t in tweets))
+        # Client-side since_id filter: skip tweets we've already seen this session
+        if _list_poll_since_id:
+            tweets = [t for t in tweets if int(t["id"]) > int(_list_poll_since_id)]
+        _list_poll_since_id = max_id
+
         for tweet in tweets:
-            if has_replied_mention(tweet["id"]):
+            # Atomic claim — prevents race with concurrent poll_mentions on same tweet.
+            if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
                 logger.debug(f"List tweet {tweet['id']} already claimed — skip")
-                continue
-            # Railway wipes SQLite on every deploy. If since_id was lost, we re-fetch
-            # old tweets whose replies are already posted. Silently claim them.
-            if _list_since_id_was_fresh and _tweet_predates_startup(tweet):
-                logger.info(f"Silently claiming pre-startup list tweet {tweet['id']} (fresh DB, avoiding double-reply)")
-                record_replied_mention(tweet["id"], tweet.get("author_id", ""))
                 continue
             if not _is_recent_tweet(tweet, MAX_LIST_AGE_HOURS * 60):
                 age = _tweet_age_minutes(tweet)
                 age_str = f"{age:.1f}" if age is not None else "no timestamp"
                 logger.info(f"SKIPPING list tweet {tweet['id']} — too old ({age_str} minutes, max {MAX_LIST_AGE_HOURS}h)")
-                record_replied_mention(tweet["id"], tweet.get("author_id", ""))
                 continue
-            record_replied_mention(tweet["id"], tweet.get("author_id", ""))
             _handle_tweet(tweet)
 
 
