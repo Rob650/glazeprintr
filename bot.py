@@ -36,10 +36,15 @@ MAX_REPLIES_PER_DAY = int(os.environ.get("MAX_REPLIES_PER_DAY", "200"))
 MAX_REPLIES_PER_ACCOUNT_HOUR = int(os.environ.get("MAX_REPLIES_PER_ACCOUNT_HOUR", "5"))
 MAX_SCORES_PER_DAY = int(os.environ.get("MAX_SCORES_PER_DAY", "20"))
 
+_BOT_START_TIME = datetime.now(timezone.utc)
+
 _list_poll_since_id: str | None = None
 _list_poll_since_id_loaded: bool = False
+_list_since_id_was_fresh: bool = False  # True when DB was wiped (since_id not persisted)
+
 _mentions_since_id: str | None = None
 _mentions_since_id_loaded: bool = False
+_mentions_since_id_was_fresh: bool = False  # True when DB was wiped (since_id not persisted)
 
 SKIP_HANDLES = {"printrglazr", "printr_money"}
 MAX_MENTION_AGE_MINUTES = 120
@@ -126,6 +131,15 @@ def _is_recent_tweet(tweet: dict, max_age_minutes: int) -> bool:
         logger.warning(f"Tweet {tweet.get('id')} has no created_at — SKIPPING (no timestamp)")
         return False
     return age <= max_age_minutes
+
+
+def _tweet_predates_startup(tweet: dict) -> bool:
+    """True if tweet was created before this process started (DB may have been wiped)."""
+    age_minutes = _tweet_age_minutes(tweet)
+    if age_minutes is None:
+        return False
+    uptime_minutes = (datetime.now(timezone.utc) - _BOT_START_TIME).total_seconds() / 60
+    return age_minutes > uptime_minutes + 1  # +1 min buffer for clock skew
 
 
 def _should_skip_reply(tweet: dict) -> tuple[bool, str]:
@@ -319,11 +333,14 @@ def _handle_tweet(tweet: dict):
 
 
 def poll_mentions():
-    global _mentions_since_id, _mentions_since_id_loaded
+    global _mentions_since_id, _mentions_since_id_loaded, _mentions_since_id_was_fresh
 
     if not _mentions_since_id_loaded:
         _mentions_since_id = get_mentions_since_id()
         _mentions_since_id_loaded = True
+        if _mentions_since_id is None:
+            _mentions_since_id_was_fresh = True
+            logger.warning("mentions since_id not found in DB — DB may be fresh/wiped; will silence pre-startup tweets")
 
     logger.info(f"Polling mentions since_id={_mentions_since_id}")
     tweets = fetch_mentions(since_id=_mentions_since_id)
@@ -334,6 +351,12 @@ def poll_mentions():
         for tweet in tweets:
             if has_replied_mention(tweet["id"]):
                 logger.debug(f"Mention {tweet['id']} already processed — skip")
+                continue
+            # Railway wipes SQLite on every deploy. If since_id was lost, we re-fetch
+            # old tweets whose replies are already posted. Silently claim them.
+            if _mentions_since_id_was_fresh and _tweet_predates_startup(tweet):
+                logger.info(f"Silently claiming pre-startup mention {tweet['id']} (fresh DB, avoiding double-reply)")
+                record_replied_mention(tweet["id"], tweet.get("author_id", ""))
                 continue
             if not _is_recent_tweet(tweet, MAX_MENTION_AGE_MINUTES):
                 age = _tweet_age_minutes(tweet)
@@ -346,7 +369,7 @@ def poll_mentions():
 
 
 def poll_list():
-    global _list_poll_since_id, _list_poll_since_id_loaded
+    global _list_poll_since_id, _list_poll_since_id_loaded, _list_since_id_was_fresh
     if not X_LIST_ID:
         logger.warning("X_LIST_ID not set — list polling disabled")
         return
@@ -354,6 +377,9 @@ def poll_list():
     if not _list_poll_since_id_loaded:
         _list_poll_since_id = get_list_since_id()
         _list_poll_since_id_loaded = True
+        if _list_poll_since_id is None:
+            _list_since_id_was_fresh = True
+            logger.warning("list since_id not found in DB — DB may be fresh/wiped; will silence pre-startup tweets")
 
     logger.info(f"Polling list {X_LIST_ID} since_id={_list_poll_since_id}")
     tweets = fetch_list_tweets(X_LIST_ID, since_id=_list_poll_since_id)
@@ -362,13 +388,20 @@ def poll_list():
         _list_poll_since_id = str(max(int(t["id"]) for t in tweets))
         set_list_since_id(_list_poll_since_id)
         for tweet in tweets:
+            if has_replied_mention(tweet["id"]):
+                logger.debug(f"List tweet {tweet['id']} already claimed — skip")
+                continue
+            # Railway wipes SQLite on every deploy. If since_id was lost, we re-fetch
+            # old tweets whose replies are already posted. Silently claim them.
+            if _list_since_id_was_fresh and _tweet_predates_startup(tweet):
+                logger.info(f"Silently claiming pre-startup list tweet {tweet['id']} (fresh DB, avoiding double-reply)")
+                record_replied_mention(tweet["id"], tweet.get("author_id", ""))
+                continue
             if not _is_recent_tweet(tweet, MAX_LIST_AGE_HOURS * 60):
                 age = _tweet_age_minutes(tweet)
                 age_str = f"{age:.1f}" if age is not None else "no timestamp"
                 logger.info(f"SKIPPING list tweet {tweet['id']} — too old ({age_str} minutes, max {MAX_LIST_AGE_HOURS}h)")
-                continue
-            if has_replied_mention(tweet["id"]):
-                logger.debug(f"List tweet {tweet['id']} already claimed — skip")
+                record_replied_mention(tweet["id"], tweet.get("author_id", ""))
                 continue
             record_replied_mention(tweet["id"], tweet.get("author_id", ""))
             _handle_tweet(tweet)
