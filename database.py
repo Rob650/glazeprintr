@@ -101,6 +101,14 @@ def init_db():
                 dry_run INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS replied_mentions (
+                tweet_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                responded_at TEXT DEFAULT (datetime('now'))
+            );
+
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('mentions_since_id', '');
         """)
 
 
@@ -316,3 +324,32 @@ def count_scores_today() -> int:
             (f"{today}%",)
         ).fetchone()
         return row[0] if row else 0
+
+
+# --- replied_mentions ---
+
+def has_replied_mention(tweet_id: str) -> bool:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM replied_mentions WHERE tweet_id = ?", (tweet_id,)
+        ).fetchone()
+        return row is not None
+
+
+def record_replied_mention(tweet_id: str, user_id: str):
+    with db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO replied_mentions (tweet_id, user_id) VALUES (?, ?)",
+            (tweet_id, user_id)
+        )
+
+
+# --- mentions since_id persistence ---
+
+def get_mentions_since_id() -> str | None:
+    val = get_state("mentions_since_id")
+    return val if val else None
+
+
+def set_mentions_since_id(since_id: str):
+    set_state("mentions_since_id", since_id)

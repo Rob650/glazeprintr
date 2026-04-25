@@ -7,11 +7,15 @@ from database import (
     has_replied, record_reply, count_replies_today,
     count_replies_to_account_last_hour, is_paused,
     set_stream_status, has_scored, record_score, count_scores_today,
-    record_original_tweet,
+    record_original_tweet, has_replied_mention, record_replied_mention,
+    get_mentions_since_id, set_mentions_since_id,
 )
-from claude_client import generate_reply, select_mode, generate_original_tweet, score_glaze
+from claude_client import (
+    generate_reply, select_mode, generate_original_tweet, score_glaze,
+    classify_tweet_intent,
+)
 from twitter_client import (
-    fetch_list_tweets, post_reply, post_tweet, post_quote_tweet,
+    fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
     setup_stream_rules, GlazePrintrStream, fetch_tweet_chain,
 )
 import memory as mem
@@ -34,6 +38,8 @@ STREAM_KEYWORDS = [
 ]
 
 _list_poll_since_id: str | None = None
+_mentions_since_id: str | None = None
+_mentions_since_id_loaded: bool = False
 _stream_thread: threading.Thread | None = None
 _stream_instance: GlazePrintrStream | None = None
 
@@ -172,8 +178,38 @@ def score_tweet(tweet: dict):
 
 
 def _handle_tweet(tweet: dict):
-    process_tweet(tweet)
-    score_tweet(tweet)
+    """Route tweet to score card (opinion) or regular reply (conversation)."""
+    try:
+        intent = classify_tweet_intent(tweet.get("text", ""), tweet.get("author_handle", ""))
+    except Exception as e:
+        logger.warning(f"Intent classification failed for {tweet['id']}: {e} — defaulting to reply")
+        intent = "conversation"
+
+    if intent == "opinion":
+        score_tweet(tweet)
+    else:
+        process_tweet(tweet)
+
+
+def poll_mentions():
+    global _mentions_since_id, _mentions_since_id_loaded
+
+    if not _mentions_since_id_loaded:
+        _mentions_since_id = get_mentions_since_id()
+        _mentions_since_id_loaded = True
+
+    logger.info(f"Polling mentions since_id={_mentions_since_id}")
+    tweets = fetch_mentions(since_id=_mentions_since_id)
+
+    if tweets:
+        _mentions_since_id = tweets[0]["id"]
+        set_mentions_since_id(_mentions_since_id)
+        for tweet in tweets:
+            if has_replied_mention(tweet["id"]):
+                logger.debug(f"Mention {tweet['id']} already processed — skip")
+                continue
+            record_replied_mention(tweet["id"], tweet.get("author_id", ""))
+            _handle_tweet(tweet)
 
 
 def poll_list():

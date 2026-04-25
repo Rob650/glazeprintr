@@ -260,6 +260,22 @@ def get_client():
     return _client
 
 
+CLASSIFY_INTENT_PROMPT = """You classify tweet intent for a crypto bot. Answer with exactly one word.
+
+Is this tweet expressing a scoreable OPINION, TAKE, or JUDGMENT about a Printr token or the Printr ecosystem?
+- YES = "opinion": bullish/bearish price call, FUD, "X is going to X", "this is a rug/gem", rating/verdict on a token, strong conviction statement about value
+- NO = "conversation": question, joke, generic mention, "gm", asking for info, general engagement, congratulation, meme
+
+Reply with ONLY the word "opinion" or "conversation". No punctuation. No explanation."""
+
+
+def classify_tweet_intent(tweet_text: str, author_handle: str) -> str:
+    """Returns 'opinion' or 'conversation'. Used to route: opinion→score card, conversation→regular reply."""
+    user_message = f'Tweet from @{author_handle}:\n"{tweet_text}"'
+    result = _call_claude(CLASSIFY_INTENT_PROMPT, user_message, max_tokens=5)
+    return "opinion" if "opinion" in result.lower() else "conversation"
+
+
 def select_mode(tweet_text: str) -> str:
     pump_keywords = ["pump.fun", "pumpfun", "pump fun", "$pump", "pumpdotfun", "bonk", "bags.fm"]
     lower = tweet_text.lower()

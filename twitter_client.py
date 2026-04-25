@@ -16,6 +16,7 @@ BOT_HANDLE = os.environ.get("BOT_HANDLE", "printrglazr")
 SKIP_HANDLES = {BOT_HANDLE.lower(), "printr_money"}
 
 _v2_client = None
+_bot_user_id: str | None = None
 
 
 def get_v2_client() -> tweepy.Client:
@@ -30,6 +31,69 @@ def get_v2_client() -> tweepy.Client:
             wait_on_rate_limit=True,
         )
     return _v2_client
+
+
+def get_bot_user_id() -> str | None:
+    global _bot_user_id
+    if _bot_user_id is not None:
+        return _bot_user_id
+    client = get_v2_client()
+    try:
+        me = client.get_me()
+        if me.data:
+            _bot_user_id = str(me.data.id)
+            logger.info(f"Bot user ID: {_bot_user_id}")
+            return _bot_user_id
+    except tweepy.TweepyException as e:
+        logger.error(f"Failed to get bot user ID: {e}")
+    return None
+
+
+def fetch_mentions(since_id: str | None = None) -> list[dict]:
+    client = get_v2_client()
+    user_id = get_bot_user_id()
+    if not user_id:
+        logger.error("Cannot fetch mentions: bot user ID unknown")
+        return []
+
+    kwargs = {
+        "id": user_id,
+        "max_results": 100,
+        "tweet_fields": ["author_id", "created_at", "text", "referenced_tweets"],
+        "expansions": ["author_id", "referenced_tweets.id"],
+        "user_fields": ["username"],
+    }
+    if since_id:
+        kwargs["since_id"] = since_id
+
+    try:
+        response = client.get_users_mentions(**kwargs)
+        if not response.data:
+            return []
+
+        users = {}
+        if response.includes and "users" in response.includes:
+            for u in response.includes["users"]:
+                users[u.id] = u.username
+
+        tweets = []
+        for tweet in response.data:
+            in_reply_to_tweet_id = None
+            for ref in (getattr(tweet, "referenced_tweets", None) or []):
+                if ref.type == "replied_to":
+                    in_reply_to_tweet_id = str(ref.id)
+                    break
+            tweets.append({
+                "id": str(tweet.id),
+                "text": tweet.text,
+                "author_id": str(tweet.author_id),
+                "author_handle": users.get(tweet.author_id, "unknown"),
+                "in_reply_to_tweet_id": in_reply_to_tweet_id,
+            })
+        return tweets
+    except tweepy.TweepyException as e:
+        logger.error(f"Failed to fetch mentions: {e}")
+        return []
 
 
 def post_reply(reply_text: str, in_reply_to_tweet_id: str) -> str | None:
