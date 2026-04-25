@@ -1,6 +1,7 @@
 import os
 import tweepy
 import logging
+from datetime import datetime, timezone, timedelta
 
 from database import set_stream_status
 
@@ -102,6 +103,9 @@ def fetch_mentions(since_id: str | None = None) -> list[dict]:
     }
     if since_id:
         kwargs["since_id"] = since_id
+    else:
+        # On cold start (no since_id), only fetch mentions from last 15 min to avoid old tweets
+        kwargs["start_time"] = datetime.now(timezone.utc) - timedelta(minutes=15)
 
     try:
         response = client.get_users_mentions(**kwargs)

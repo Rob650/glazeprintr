@@ -307,7 +307,7 @@ def poll_mentions():
     tweets = fetch_mentions(since_id=_mentions_since_id)
 
     if tweets:
-        _mentions_since_id = tweets[0]["id"]
+        _mentions_since_id = str(max(int(t["id"]) for t in tweets))
         set_mentions_since_id(_mentions_since_id)
         for tweet in tweets:
             if has_replied_mention(tweet["id"]):
@@ -337,7 +337,7 @@ def poll_list():
     tweets = fetch_list_tweets(X_LIST_ID, since_id=_list_poll_since_id)
 
     if tweets:
-        _list_poll_since_id = tweets[0]["id"]
+        _list_poll_since_id = str(max(int(t["id"]) for t in tweets))
         set_list_since_id(_list_poll_since_id)
         for tweet in tweets:
             if not _is_recent_tweet(tweet, MAX_LIST_AGE_HOURS * 60):
