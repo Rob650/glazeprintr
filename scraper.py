@@ -1,3 +1,4 @@
+import os
 import aiohttp
 import asyncio
 import logging
@@ -6,6 +7,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens/{}"
+DUNE_DASHBOARD_URL = "https://dune.com/defioasis/printr"
 
 PRINTR_ENDPOINTS = [
     "https://api.printr.money/v1/tokens?sort=marketCap&order=desc&limit=50",
@@ -220,6 +222,42 @@ def _normalize_token(raw: dict) -> Optional[dict]:
         "liquidity": 0.0,
         "staking_pct": staking_pct,
     }
+
+
+async def fetch_dune_context(session: aiohttp.ClientSession) -> str:
+    """
+    Fetch Printr on-chain analytics from Dune dashboard.
+    Requires DUNE_API_KEY env var and optionally DUNE_QUERY_IDS (comma-separated query IDs).
+    Falls back to returning the dashboard URL as context if credentials are absent.
+    """
+    api_key = os.environ.get("DUNE_API_KEY", "")
+    if not api_key:
+        return f"Printr on-chain analytics available at {DUNE_DASHBOARD_URL}"
+
+    query_ids_env = os.environ.get("DUNE_QUERY_IDS", "")
+    if not query_ids_env:
+        return f"Printr on-chain analytics available at {DUNE_DASHBOARD_URL}"
+
+    query_ids = [q.strip() for q in query_ids_env.split(",") if q.strip()]
+    headers = {"X-DUNE-API-KEY": api_key, "Content-Type": "application/json"}
+    parts: list[str] = []
+
+    for query_id in query_ids:
+        try:
+            url = f"https://api.dune.com/api/v1/query/{query_id}/results"
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    rows = (data.get("result") or {}).get("rows") or []
+                    if rows:
+                        parts.append(f"[query {query_id}] {rows[:5]}")
+                        logger.info(f"Dune query {query_id}: {len(rows)} rows")
+        except Exception as e:
+            logger.warning(f"Dune query {query_id} failed: {e}")
+
+    if parts:
+        return f"Printr on-chain analytics ({DUNE_DASHBOARD_URL}):\n" + "\n".join(parts)
+    return f"Printr on-chain analytics available at {DUNE_DASHBOARD_URL}"
 
 
 async def scrape_all_data() -> list[dict]:
