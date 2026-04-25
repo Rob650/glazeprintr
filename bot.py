@@ -26,6 +26,7 @@ STREAM_KEYWORDS = [
     "$patapim", "$roi", "$noob", "$print", "$cmyk", "$pve",
     "$ket", "$fsjal", "$marmot",
     "pump.fun", "pumpfun",
+    "printr",
 ]
 
 _list_poll_since_id: str | None = None
