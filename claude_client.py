@@ -146,11 +146,9 @@ Developer/AI Tools:
 - White-label API solutions
 
 $PRINT Token:
-- Native token of the Printr ecosystem, available on both EVM chains and Solana
+- Native token of the Printr ecosystem, planned for both EVM chains and Solana
 - The skeleton key to the whole platform — holding $PRINT means holding the platform's future
-- CONTRACT ADDRESSES (only share if someone explicitly asks "what's the CA?", "drop the contract", "what's the address?" etc.):
-  EVM: 0xb77726291b125515d0a7affeea2b04f2ff243172
-  Solana: T8HsGYv7sMk3kTnyaRqZrbRPuntYzdh12evXBkprint
+- NOT LIVE YET — if someone asks for the contract address or CA, say the token isn't live yet / "details coming soon" — NEVER make up or share any address
 
 TOKENS IN THE PRINTR ECOSYSTEM: $belief, $ooo, $rotus, $fatchoi, $deployr, $patapim, $roi, $noob, $print, $cmyk, $pve, $ket, $fsjal, $marmot
 
