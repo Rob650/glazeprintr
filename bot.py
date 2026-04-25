@@ -12,6 +12,7 @@ from database import (
     set_stream_status, has_scored, record_score, count_scores_today,
     record_original_tweet, has_replied_mention, record_replied_mention,
     get_mentions_since_id, set_mentions_since_id,
+    get_list_since_id, set_list_since_id,
     has_replied_to_author_in_chain,
 )
 from claude_client import (
@@ -45,6 +46,7 @@ STREAM_KEYWORDS = [
 ]
 
 _list_poll_since_id: str | None = None
+_list_poll_since_id_loaded: bool = False
 _mentions_since_id: str | None = None
 _mentions_since_id_loaded: bool = False
 _stream_thread: threading.Thread | None = None
@@ -94,9 +96,14 @@ def _tweet_age_minutes(tweet: dict) -> float | None:
     created_at = tweet.get("created_at")
     if not created_at:
         return None
-    if isinstance(created_at, str):
-        created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-    return (datetime.now(timezone.utc) - created_at).total_seconds() / 60
+    try:
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        if getattr(created_at, "tzinfo", None) is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - created_at).total_seconds() / 60
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 def _is_recent_tweet(tweet: dict, max_age_minutes: int) -> bool:
@@ -317,16 +324,21 @@ def poll_mentions():
 
 
 def poll_list():
-    global _list_poll_since_id
+    global _list_poll_since_id, _list_poll_since_id_loaded
     if not X_LIST_ID:
         logger.warning("X_LIST_ID not set — list polling disabled")
         return
+
+    if not _list_poll_since_id_loaded:
+        _list_poll_since_id = get_list_since_id()
+        _list_poll_since_id_loaded = True
 
     logger.info(f"Polling list {X_LIST_ID} since_id={_list_poll_since_id}")
     tweets = fetch_list_tweets(X_LIST_ID, since_id=_list_poll_since_id)
 
     if tweets:
         _list_poll_since_id = tweets[0]["id"]
+        set_list_since_id(_list_poll_since_id)
         for tweet in tweets:
             if not _is_recent_tweet(tweet, MAX_LIST_AGE_HOURS * 60):
                 age = _tweet_age_minutes(tweet)
