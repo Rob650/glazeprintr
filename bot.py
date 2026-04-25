@@ -6,12 +6,11 @@ import re
 from datetime import datetime, timezone, timedelta
 
 from database import (
-    has_replied, record_reply, count_replies_today,
+    has_replied, record_reply,
     count_replies_to_account_last_hour, is_paused,
     has_scored, record_score, count_scores_today,
     record_original_tweet, has_replied_mention, record_replied_mention,
     get_mentions_since_id, set_mentions_since_id,
-    has_replied_to_author_in_chain,
     try_claim_mention, try_claim_reply,
 )
 from claude_client import (
@@ -32,7 +31,6 @@ logger = logging.getLogger(__name__)
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
 X_LIST_ID = os.environ.get("X_LIST_ID", "")
-MAX_REPLIES_PER_DAY = int(os.environ.get("MAX_REPLIES_PER_DAY", "200"))
 MAX_REPLIES_PER_ACCOUNT_HOUR = int(os.environ.get("MAX_REPLIES_PER_ACCOUNT_HOUR", "5"))
 MAX_SCORES_PER_DAY = int(os.environ.get("MAX_SCORES_PER_DAY", "20"))
 
@@ -146,15 +144,8 @@ def _should_skip_reply(tweet: dict) -> tuple[bool, str]:
         return True, f"skip handle @{handle}"
     if has_replied(tweet["id"]):
         return True, "already replied"
-    if count_replies_today() >= MAX_REPLIES_PER_DAY:
-        return True, f"daily limit {MAX_REPLIES_PER_DAY} reached"
     if tweet.get("author_id") and count_replies_to_account_last_hour(tweet["author_id"]) >= MAX_REPLIES_PER_ACCOUNT_HOUR:
         return True, "hourly account limit reached"
-    # Don't reply again unless they replied directly to one of our replies
-    if tweet.get("author_id") and has_replied_to_author_in_chain(
-        tweet["author_id"], tweet.get("in_reply_to_tweet_id")
-    ):
-        return True, "already replied to this author in thread (no response from them)"
     return False, ""
 
 
