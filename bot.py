@@ -11,6 +11,7 @@ from database import (
     has_scored, record_score, count_scores_today,
     record_original_tweet, has_replied_mention, record_replied_mention,
     get_mentions_since_id, set_mentions_since_id,
+    get_list_since_id, set_list_since_id,
     try_claim_mention, try_claim_reply,
 )
 from claude_client import (
@@ -37,7 +38,8 @@ MAX_SCORES_PER_DAY = int(os.environ.get("MAX_SCORES_PER_DAY", "20"))
 
 _BOT_START_TIME = datetime.now(timezone.utc)
 
-_list_poll_since_id: str | None = None  # in-memory only; List API doesn't support since_id
+_list_poll_since_id: str | None = None  # loaded from DB on first call; List API doesn't support since_id natively
+_list_poll_since_id_loaded: bool = False
 
 _mentions_since_id: str | None = None
 _mentions_since_id_loaded: bool = False
@@ -57,6 +59,25 @@ _latest_projects: list[dict] = []
 _CONTRACT_RE = re.compile(
     r'\b(0x[0-9a-fA-F]{40,}|[1-9A-HJ-NP-Za-km-z]{32,44})\b'
 )
+
+# Keywords that make a list tweet worth engaging with.
+# Tweets missing all of these AND any cashtag are skipped silently.
+_LIST_RELEVANCE_KEYWORDS = frozenset([
+    "printr", "pumpfun", "pump.fun", "pump fun",
+    "staking", "pob", "proof of belief", "bonding",
+    "crypto", "defi", "blockchain", "solana", "ethereum", "bitcoin",
+    "token", "nft", "liquidity", "launchpad", "layerzero", "omnichain",
+    "ngmi", "wagmi", "degen", "aping", "rekt", "fud", "shill",
+    "gem", "rug", "mcap", "altcoin", "memecoin",
+])
+
+
+def _is_relevant_tweet(text: str) -> bool:
+    """Returns True if the tweet is crypto/Printr-related and worth engaging with."""
+    if re.search(r'\$[a-zA-Z]{2,}', text):
+        return True
+    lower = text.lower()
+    return any(kw in lower for kw in _LIST_RELEVANCE_KEYWORDS)
 
 
 def _extract_token(text: str, extra: str = "") -> str:
@@ -239,21 +260,22 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
     )
 
 
-def score_tweet(tweet: dict, thread_context: list[dict] | None = None):
+def score_tweet(tweet: dict, thread_context: list[dict] | None = None) -> bool:
+    """Score the tweet with a glaze score quote-tweet. Returns True if scored, False if not Printr-relevant."""
     if is_paused():
-        return
+        return False
 
     handle = tweet.get("author_handle", "").lower().lstrip("@")
     if handle in SKIP_HANDLES:
-        return
+        return False
 
     tweet_id = tweet["id"]
     if has_scored(tweet_id):
-        return
+        return True  # already scored — no need to fall back to reply
 
     if count_scores_today() >= MAX_SCORES_PER_DAY:
         logger.debug("Daily glaze score limit reached")
-        return
+        return False
 
     tweet_text = tweet.get("text", "")
     author_handle = tweet.get("author_handle", "unknown")
@@ -264,11 +286,11 @@ def score_tweet(tweet: dict, thread_context: list[dict] | None = None):
         result = score_glaze(tweet_text, author_handle, thread_context=thread_context)
     except Exception as e:
         logger.error(f"Claude scoring error for {tweet_id}: {e}")
-        return
+        return False
 
     if result is None:
         logger.debug(f"Tweet {tweet_id} not Printr-relevant — no score card")
-        return
+        return False
 
     score, tier, score_card = result
 
@@ -285,6 +307,7 @@ def score_tweet(tweet: dict, thread_context: list[dict] | None = None):
         quote_id = post_quote_tweet(score_card, tweet_id, media_path=img_path)
         record_score(tweet_id, author_handle, score, tier, score_card, quote_id, dry_run=False)
         logger.info(f"Glaze scored @{author_handle}: {score}/100 [{tier}] img={'yes' if img_path else 'no'}")
+    return True
 
 
 def _handle_tweet(tweet: dict):
@@ -301,7 +324,10 @@ def _handle_tweet(tweet: dict):
         intent = "conversation"
 
     if intent == "opinion":
-        score_tweet(tweet, thread_context=thread_context)
+        scored = score_tweet(tweet, thread_context=thread_context)
+        if not scored:
+            # Not Printr-relevant for a glaze score — fall back to conversational reply
+            process_tweet(tweet, thread_context=thread_context)
     else:
         process_tweet(tweet, thread_context=thread_context)
 
@@ -342,33 +368,55 @@ def poll_mentions():
 
 
 def poll_list():
-    global _list_poll_since_id
+    global _list_poll_since_id, _list_poll_since_id_loaded
     if not X_LIST_ID:
         logger.warning("X_LIST_ID not set — list polling disabled")
         return
 
+    # Load persisted since_id once per session (survives restarts if DB is not wiped)
+    if not _list_poll_since_id_loaded:
+        _list_poll_since_id = get_list_since_id()
+        _list_poll_since_id_loaded = True
+
+    # Cold start = no known position; use wider catch-up window to recover after downtime
+    is_cold_start = _list_poll_since_id is None
+
     # The Twitter List Tweets API does NOT support since_id — filtered client-side instead.
-    logger.info(f"Polling list {X_LIST_ID} (in-memory since_id={_list_poll_since_id})")
+    logger.info(f"Polling list {X_LIST_ID} (since_id={_list_poll_since_id}, cold_start={is_cold_start})")
     tweets = fetch_list_tweets(X_LIST_ID)
+    logger.info(f"fetch_list_tweets returned {len(tweets)} tweet(s)")
 
-    if tweets:
-        max_id = str(max(int(t["id"]) for t in tweets))
-        # Client-side since_id filter: skip tweets we've already seen this session
-        if _list_poll_since_id:
-            tweets = [t for t in tweets if int(t["id"]) > int(_list_poll_since_id)]
-        _list_poll_since_id = max_id
+    if not tweets:
+        return
 
-        for tweet in tweets:
-            # Atomic claim — prevents race with concurrent poll_mentions on same tweet.
-            if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
-                logger.debug(f"List tweet {tweet['id']} already claimed — skip")
-                continue
-            if not _is_recent_tweet(tweet, MAX_LIST_AGE_HOURS * 60):
-                age = _tweet_age_minutes(tweet)
-                age_str = f"{age:.1f}" if age is not None else "no timestamp"
-                logger.info(f"SKIPPING list tweet {tweet['id']} — too old ({age_str} minutes, max {MAX_LIST_AGE_HOURS}h)")
-                continue
-            _handle_tweet(tweet)
+    max_id = str(max(int(t["id"]) for t in tweets))
+    # Client-side since_id filter: skip tweets we've already seen this session
+    if _list_poll_since_id:
+        tweets = [t for t in tweets if int(t["id"]) > int(_list_poll_since_id)]
+    _list_poll_since_id = max_id
+    set_list_since_id(max_id)  # persist across restarts
+
+    logger.info(f"After since_id filter: {len(tweets)} candidate tweet(s)")
+
+    # On cold start, match mentions' 2h catch-up window; otherwise use the configured 1h limit
+    age_limit = MAX_MENTION_AGE_MINUTES if is_cold_start else MAX_LIST_AGE_HOURS * 60
+
+    for tweet in tweets:
+        # Age check first — avoids polluting replied_mentions with tweets we'll never process
+        if not _is_recent_tweet(tweet, age_limit):
+            age = _tweet_age_minutes(tweet)
+            age_str = f"{age:.1f}" if age is not None else "no timestamp"
+            logger.info(f"SKIPPING list tweet {tweet['id']} — too old ({age_str} min, max {age_limit}min)")
+            continue
+        # Relevance check — skip tweets unrelated to crypto/Printr (lunch, sports, etc.)
+        if not _is_relevant_tweet(tweet.get("text", "")):
+            logger.debug(f"SKIPPING list tweet {tweet['id']} — not crypto/Printr related")
+            continue
+        # Atomic claim — prevents race with concurrent poll_mentions on same tweet
+        if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
+            logger.debug(f"List tweet {tweet['id']} already claimed — skip")
+            continue
+        _handle_tweet(tweet)
 
 
 async def post_original_tweet():
