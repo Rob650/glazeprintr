@@ -1,7 +1,5 @@
 import os
 import tweepy
-import aiohttp
-import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
@@ -18,7 +16,6 @@ BOT_HANDLE = os.environ.get("BOT_HANDLE", "printrglazr")
 SKIP_HANDLES = {BOT_HANDLE.lower(), "printr_money"}
 
 _v2_client = None
-_v1_api = None
 
 
 def get_v2_client() -> tweepy.Client:
@@ -50,13 +47,37 @@ def post_reply(reply_text: str, in_reply_to_tweet_id: str) -> str | None:
         return None
 
 
+def post_tweet(text: str) -> str | None:
+    client = get_v2_client()
+    try:
+        response = client.create_tweet(text=text)
+        tweet_id = response.data["id"]
+        logger.info(f"Posted original tweet {tweet_id}: {text[:60]}...")
+        return tweet_id
+    except tweepy.TweepyException as e:
+        logger.error(f"Failed to post tweet: {e}")
+        return None
+
+
+def post_quote_tweet(text: str, quote_tweet_id: str) -> str | None:
+    client = get_v2_client()
+    try:
+        response = client.create_tweet(text=text, quote_tweet_id=quote_tweet_id)
+        tweet_id = response.data["id"]
+        logger.info(f"Posted quote tweet {tweet_id}: {text[:60]}...")
+        return tweet_id
+    except tweepy.TweepyException as e:
+        logger.error(f"Failed to post quote tweet: {e}")
+        return None
+
+
 def fetch_list_tweets(list_id: str, since_id: str | None = None) -> list[dict]:
     client = get_v2_client()
     kwargs = {
         "id": list_id,
         "max_results": 100,
-        "tweet_fields": ["author_id", "created_at", "text"],
-        "expansions": ["author_id"],
+        "tweet_fields": ["author_id", "created_at", "text", "referenced_tweets"],
+        "expansions": ["author_id", "referenced_tweets.id"],
         "user_fields": ["username"],
     }
     if since_id:
@@ -74,16 +95,74 @@ def fetch_list_tweets(list_id: str, since_id: str | None = None) -> list[dict]:
 
         tweets = []
         for tweet in response.data:
+            in_reply_to_tweet_id = None
+            for ref in (getattr(tweet, "referenced_tweets", None) or []):
+                if ref.type == "replied_to":
+                    in_reply_to_tweet_id = str(ref.id)
+                    break
             tweets.append({
                 "id": str(tweet.id),
                 "text": tweet.text,
                 "author_id": str(tweet.author_id),
                 "author_handle": users.get(tweet.author_id, "unknown"),
+                "in_reply_to_tweet_id": in_reply_to_tweet_id,
             })
         return tweets
     except tweepy.TweepyException as e:
         logger.error(f"Failed to fetch list tweets: {e}")
         return []
+
+
+def fetch_tweet_chain(tweet_id: str, max_depth: int = 5) -> list[dict]:
+    """Fetch the chain of parent tweets up to max_depth levels, returning oldest first."""
+    client = get_v2_client()
+    chain = []
+    current_id = tweet_id
+    seen = set()
+
+    for _ in range(max_depth):
+        if current_id in seen:
+            break
+        seen.add(current_id)
+
+        try:
+            response = client.get_tweet(
+                id=current_id,
+                tweet_fields=["author_id", "text", "referenced_tweets"],
+                expansions=["author_id", "referenced_tweets.id"],
+                user_fields=["username"],
+            )
+            if not response.data:
+                break
+
+            tweet = response.data
+            users = {}
+            if response.includes and "users" in response.includes:
+                for u in response.includes["users"]:
+                    users[u.id] = u.username
+
+            chain.append({
+                "id": str(tweet.id),
+                "text": tweet.text,
+                "author_id": str(tweet.author_id) if tweet.author_id else "",
+                "author_handle": users.get(tweet.author_id, "unknown"),
+            })
+
+            parent_ref = next(
+                (r for r in (getattr(tweet, "referenced_tweets", None) or [])
+                 if r.type == "replied_to"),
+                None,
+            )
+            if parent_ref:
+                current_id = str(parent_ref.id)
+            else:
+                break
+
+        except tweepy.TweepyException as e:
+            logger.error(f"Failed to fetch tweet {current_id}: {e}")
+            break
+
+    return list(reversed(chain))
 
 
 def setup_stream_rules(keywords: list[str]):
@@ -117,11 +196,17 @@ class GlazePrintrStream(tweepy.StreamingClient):
         self._on_tweet = on_tweet_callback
 
     def on_tweet(self, tweet):
+        in_reply_to_tweet_id = None
+        for ref in (getattr(tweet, "referenced_tweets", None) or []):
+            if hasattr(ref, "type") and ref.type == "replied_to":
+                in_reply_to_tweet_id = str(ref.id)
+                break
         self._on_tweet({
             "id": str(tweet.id),
             "text": tweet.text,
             "author_id": str(tweet.author_id) if tweet.author_id else "",
             "author_handle": "stream_user",
+            "in_reply_to_tweet_id": in_reply_to_tweet_id,
         })
 
     def on_errors(self, errors):
