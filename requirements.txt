@@ -1,0 +1,6 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+tweepy==4.14.0
+anthropic==0.40.0
+apscheduler==3.10.4
+aiohttp==3.11.10
