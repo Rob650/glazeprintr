@@ -195,6 +195,13 @@ async def api_pause(body: dict):
     return {"paused": paused, "status": status}
 
 
+@app.post("/api/trigger-tweet")
+async def api_trigger_tweet():
+    logger.info("Manual original tweet trigger via API")
+    asyncio.create_task(bot.post_original_tweet())
+    return {"status": "triggered", "dry_run": DRY_RUN}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "glazeprintr", "dry_run": DRY_RUN}
