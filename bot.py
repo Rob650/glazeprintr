@@ -26,7 +26,7 @@ from image_generator import (
     generate_glaze_score_card, generate_ecosystem_stats_card, remix_tweet_image,
 )
 import memory as mem
-from scraper import scrape_all_data
+from scraper import scrape_all_data, fetch_token_data_sync
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,10 @@ ECOSYSTEM_TOKENS = [
 
 _latest_projects: list[dict] = []
 
+_CONTRACT_RE = re.compile(
+    r'\b(0x[0-9a-fA-F]{40,}|[1-9A-HJ-NP-Za-km-z]{32,44})\b'
+)
+
 
 def _extract_token(text: str, extra: str = "") -> str:
     combined = (text + " " + extra).lower()
@@ -72,12 +76,33 @@ def _get_token_metrics(token_name: str) -> dict | None:
     for proj in _latest_projects:
         if proj.get("name", "").lower() == token_name.lower():
             return {
+                "name": proj.get("name"),
                 "staking_pct": proj.get("staking_pct"),
                 "market_cap": proj.get("market_cap"),
                 "volume": proj.get("volume"),
                 "price_change_24h": proj.get("price_change_24h"),
+                "price": proj.get("price"),
             }
     return None
+
+
+def _get_tweet_token_data(tweet_text: str) -> dict | None:
+    """Look up live token data for any contract address or ticker mentioned in a tweet."""
+    contract_match = _CONTRACT_RE.search(tweet_text)
+    if contract_match:
+        data = fetch_token_data_sync(contract_match.group(1))
+        if data:
+            return data
+
+    token_name = _extract_token(tweet_text)
+    if not token_name:
+        return None
+
+    cached = _get_token_metrics(token_name)
+    if cached and any(v is not None for v in cached.values()):
+        return cached
+
+    return fetch_token_data_sync(token_name)
 
 
 def _tweet_age_minutes(tweet: dict) -> float | None:
@@ -159,12 +184,21 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
         thread_context = _get_thread_context(tweet)
     memory_context = mem.get_memory_context()
 
+    token_data = None
+    try:
+        token_data = _get_tweet_token_data(tweet_text)
+        if token_data:
+            logger.info(f"Got token data for reply: {token_data.get('name')} mc={token_data.get('market_cap')}")
+    except Exception as e:
+        logger.warning(f"Token lookup failed for tweet {tweet['id']}: {e}")
+
     try:
         reply_text, mode = generate_reply(
             tweet_text,
             author_handle,
             thread_context=thread_context,
             memory_context=memory_context,
+            token_data=token_data,
         )
     except Exception as e:
         logger.error(f"Claude error for tweet {tweet['id']}: {e}")

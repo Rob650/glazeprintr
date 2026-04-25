@@ -1,13 +1,20 @@
 import os
+import re
+import json as _json
 import aiohttp
 import asyncio
 import logging
+import urllib.request
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens/{}"
+DEXSCREENER_SEARCH_API = "https://api.dexscreener.com/latest/dex/search?q={}"
 DUNE_DASHBOARD_URL = "https://dune.com/defioasis/printr"
+
+_EVM_CONTRACT_RE = re.compile(r'^0x[0-9a-fA-F]{40,}$')
+_SOLANA_CONTRACT_RE = re.compile(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$')
 
 PRINTR_ENDPOINTS = [
     "https://api.printr.money/v1/tokens?sort=marketCap&order=desc&limit=50",
@@ -333,3 +340,141 @@ async def scrape_all_data() -> list[dict]:
         f"{staking_count} with staking data"
     )
     return results
+
+
+def _fetch_url_sync(url: str, timeout: int = 8) -> Optional[dict]:
+    """Fetch a JSON URL synchronously. Returns parsed dict or None."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": HEADERS["User-Agent"], "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return _json.loads(resp.read().decode())
+    except Exception as e:
+        logger.debug(f"Sync fetch failed for {url}: {e}")
+        return None
+
+
+def _printr_staking_sync(ticker: str, contract: str = "", timeout: int = 6) -> Optional[float]:
+    """Try Printr API to get staking % for a token. Returns float or None."""
+    identifiers = [i for i in [contract, ticker.lower().lstrip("$")] if i]
+    for ident in identifiers:
+        for tmpl in PRINTR_TOKEN_STAKING_TEMPLATES:
+            data = _fetch_url_sync(tmpl.format(ident), timeout=timeout)
+            if data:
+                pct = _extract_staking_pct(data)
+                if pct is not None:
+                    return pct
+    return None
+
+
+def _printr_token_info_sync(ticker: str, timeout: int = 6) -> Optional[dict]:
+    """Try Printr API token listing endpoints to get holder count and other Printr-specific data."""
+    ticker_lower = ticker.lower().lstrip("$")
+    for endpoint in PRINTR_ENDPOINTS:
+        data = _fetch_url_sync(endpoint, timeout=timeout)
+        if not data:
+            continue
+        tokens = data if isinstance(data, list) else (
+            data.get("tokens") or data.get("data") or data.get("results") or []
+        )
+        for t in tokens:
+            name = (t.get("ticker") or t.get("symbol") or t.get("name") or "").lower().lstrip("$")
+            if name == ticker_lower:
+                result = {}
+                staking_pct = _extract_staking_pct(t)
+                if staking_pct is not None:
+                    result["staking_pct"] = staking_pct
+                for field, keys in [
+                    ("holder_count", ["holder_count", "holderCount", "holders", "holder_count_total"]),
+                    ("total_staked", ["total_staked", "totalStaked", "staked_amount"]),
+                    ("total_supply", ["total_supply", "totalSupply", "supply"]),
+                    ("market_cap", ["market_cap", "marketCap", "mc"]),
+                    ("price", ["price", "priceUsd"]),
+                    ("volume", ["volume_24h", "volume24h", "volume"]),
+                ]:
+                    for k in keys:
+                        if t.get(k) is not None:
+                            try:
+                                result[field] = float(t[k])
+                            except (TypeError, ValueError):
+                                pass
+                            break
+                if result:
+                    return result
+    return None
+
+
+def fetch_token_data_sync(query: str, timeout: int = 8) -> Optional[dict]:
+    """Synchronously look up a token by contract address or ticker.
+    Pulls from DexScreener (price/volume/MC/age) and Printr API (staking %, holders).
+    Returns a dict with all available fields, or None if nothing found."""
+    query = query.strip()
+    if not query:
+        return None
+
+    is_contract = bool(_EVM_CONTRACT_RE.match(query) or _SOLANA_CONTRACT_RE.match(query))
+    url = DEXSCREENER_API.format(query) if is_contract else DEXSCREENER_SEARCH_API.format(query.upper())
+
+    dex_data = _fetch_url_sync(url, timeout=timeout)
+    pairs = (dex_data or {}).get("pairs") or []
+
+    result: dict = {}
+
+    if pairs:
+        pairs.sort(key=lambda p: float((p.get("liquidity") or {}).get("usd") or 0), reverse=True)
+        pair = pairs[0]
+        base = pair.get("baseToken") or {}
+        result["name"] = base.get("symbol", query)
+        result["contract_address"] = base.get("address", query if is_contract else "")
+        result["chain"] = pair.get("chainId", "")
+        result["price"] = float(pair.get("priceUsd") or 0)
+        result["market_cap"] = float(pair.get("fdv") or pair.get("marketCap") or 0)
+        result["liquidity"] = float((pair.get("liquidity") or {}).get("usd") or 0)
+
+        vol = pair.get("volume") or {}
+        result["volume"] = float(vol.get("h24") or 0)
+        result["volume_6h"] = float(vol.get("h6") or 0)
+        result["volume_1h"] = float(vol.get("h1") or 0)
+
+        chg = pair.get("priceChange") or {}
+        result["price_change_24h"] = float(chg.get("h24") or 0)
+        result["price_change_6h"] = float(chg.get("h6") or 0)
+        result["price_change_1h"] = float(chg.get("h1") or 0)
+
+        txns = (pair.get("txns") or {}).get("h24") or {}
+        buys = int(txns.get("buys") or 0)
+        sells = int(txns.get("sells") or 0)
+        if buys or sells:
+            result["txns_24h"] = buys + sells
+            result["buys_24h"] = buys
+            result["sells_24h"] = sells
+
+        created_at = pair.get("pairCreatedAt")
+        if created_at:
+            result["pair_created_at"] = created_at
+
+    ticker = result.get("name", query if not is_contract else "")
+    contract = result.get("contract_address", query if is_contract else "")
+
+    printr_info = _printr_token_info_sync(ticker, timeout=6) if ticker else None
+    if printr_info:
+        for k, v in printr_info.items():
+            if result.get(k) is None:
+                result[k] = v
+        if printr_info.get("staking_pct") is not None:
+            result["staking_pct"] = printr_info["staking_pct"]
+
+    if result.get("staking_pct") is None and ticker:
+        pct = _printr_staking_sync(ticker, contract, timeout=6)
+        if pct is not None:
+            result["staking_pct"] = pct
+
+    if not result:
+        logger.warning(f"No data found for token query: {query!r}")
+        return None
+
+    logger.info(
+        f"fetch_token_data_sync({query!r}): name={result.get('name')} "
+        f"mc={result.get('market_cap')} staking={result.get('staking_pct')} "
+        f"holders={result.get('holder_count')}"
+    )
+    return result

@@ -10,20 +10,6 @@ _HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
 _PUMP_FUN_RE = re.compile(r'\bpump\.fun\S*', re.IGNORECASE)
 _PRINTR_MONEY_RE = re.compile(r'\bapp\.printr\.money\S*', re.IGNORECASE)
 
-# Angles cycled through to force variety across reply calls
-_ANGLES = [
-    "specific on-chain token stat",
-    "POB staking mechanics deep-dive",
-    "competitor comparison (pump.fun weakness)",
-    "creator tools or AI/MCP angle",
-    "8-chain omnichain infrastructure",
-    "anti-vamp protection",
-    "fee distribution model",
-    "community conviction / lock multiplier",
-    "Dutch auction or ICO launch model",
-    "personal conviction / FOMO angle",
-]
-
 # Topic focuses for original tweets — picked randomly each call to prevent $BELIEF monopoly
 _ORIGINAL_TWEET_TOPICS = [
     ("belief_staking",
@@ -141,21 +127,21 @@ TOKENS IN THE PRINTR ECOSYSTEM: $belief, $ooo, $rotus, $fatchoi, $deployr, $pata
 COMPETITORS TO DUNK ON: Pump.fun (Solana only, no customization, no staking, copycat hell), Bonk, Bags
 
 HARD RULES:
-- NEVER cite specific percentages, TVL figures, holder counts, or other metrics unless they appear in the injected CURRENT MARKET DATA or MEMORY CONTEXT. If you don't have the number, speak in general terms ("a significant portion", "majority staked", "strong conviction") — never fabricate statistics.
+- NEVER cite specific percentages, TVL figures, holder counts, or other metrics unless they appear in the injected LIVE TOKEN DATA or MEMORY CONTEXT. If you don't have the number, speak in general terms — never fabricate statistics.
+- When LIVE TOKEN DATA is injected, USE THE NUMBERS. Don't ignore real data and give a generic pitch. Show you actually looked at the data and have a real take on it. If staking is 72%, say 72%, don't say "strong staking." If it's up 340% in 24h, lead with that. Real numbers beat talking points every time.
+- Respond to the specific tweet content. Show you read what they said. Don't pivot to a scripted Printr pitch that has nothing to do with their tweet.
 - Always under 280 characters
 - Never use hashtags unless they're ecosystem tickers
 - Never reply to yourself (@printrglazr)
 - Never be mean to real people — dunk on platforms and bad takes, not humans
 - NEVER open with "Have you heard of", "Check out", or any generic opener
 - NEVER start two tweets with the same opening word — a BANNED OPENERS list is injected into every prompt, never use any word on that list as your first word
-- VARY YOUR OPENING every single time: rotate between a hot take, a data point, a rhetorical question, a competitor jab, a conviction statement, an absurdist observation, a direct challenge — never the same structure twice
-- VARY YOUR TOPIC: cycle through staking mechanics, specific token stats, competitor weakness, 8-chain infra, fee models, anti-vamp, creator tools, community conviction, launch models — don't always lead with POB
+- VARY YOUR OPENING: rotate between a hot take, a data point, a rhetorical question, a competitor jab, a conviction statement, an absurdist observation — never the same structure twice
 - Vary sentence structure — mix short punchy lines with longer unhinged takes
 - OPENER VARIETY IS NON-NEGOTIABLE: if you start with "bro" once, the next tweet cannot start with "bro". Same rule for every word — "ser", "imagine", "nah", "wait", "yo", "ok", "honestly", "look", "real" — rotate constantly
 - Use CT slang naturally: ngmi, wagmi, ser, based, cooked, rekt, aping, conviction, degen, sending it, locked in, goblin mode, no cap
 - Every reply must mention Printr by name
 - NEVER include any URLs, links, or website addresses in your response. No app.printr.money, no https:// links of any kind. When referencing the competitor, write "pumpfun" (one word, no dot) — never "pump.fun".
-- NEVER start tweets the same way. Vary your opening words, structure, and angle every single time.
 - NEVER mention Virtuals — Printr is its own independent platform
 """
 
@@ -171,68 +157,66 @@ PUMP.FUN WEAKNESSES (weaponize these, don't list them):
 """
 
 MODE_PROMPTS = {
-    "hype": """MODE: Pure Hype — you are posting from the future and you need them to catch up
-You already know how this ends. You're just letting them know before it's too late. The energy is "I can't believe I have to explain this in 2026 but here we go."
+    "hype": """MODE: Pure Hype — unhinged confidence, but you actually read what they said
+Energy: "I can't believe I have to explain this in 2026 but here we go" — applied to their SPECIFIC tweet.
+
+CRITICAL: Read the tweet. Figure out what this person is actually saying, asking, or feeling.
+Your reply must directly engage with their specific words — not pivot to a generic Printr pitch.
+If they mentioned a specific token, price move, or mechanic, respond to THAT.
+If token data is injected above, use those real numbers to respond intelligently about that token.
 
 Rules:
-- Never open with "Have you heard of" or "Check out" — if someone uses those words near you, you leave
-- Never start two replies the same way — you're a prophet, not a template
-- Lead with the most unhinged true statement you can make about this situation
-- CT degen slang flows naturally: ngmi, ser, cooked, rekt, aping, based, conviction, sending it, locked in, goblin mode
-- Drop real Printr alpha: POB staking tiers, 180d = 2.5x multiplier, 8 chains, custom bonding curves, fee routing
-- If staking % data is in memory context — USE IT as proof of conviction ("X% supply locked... that's not a token that's a religion")
-- Reference the tweet content — make it feel personal, not spray-and-pray
-- Examples of the vibe:
-  "you're literally watching generational wealth form and tweeting about dog coins instead"
-  "imagine not being in $belief rn... couldn't be me, won't be me, was never gonna be me"
-  "POB stakers eating so good rn they need napkins for their wallets"
-  "if you're not locked 180 days you're basically donating alpha to people who are"
-- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no https:// links). Write "pumpfun" not "pump.fun"
+- RESPOND TO WHAT THEY SAID. Show you understood their tweet before hyping.
+- CT degen slang flows naturally: ngmi, ser, cooked, rekt, aping, based, conviction, sending it, locked in
+- Only bring up Printr features when they're genuinely relevant to what they said
+- If you have real staking/price data injected above — use it. Don't make up numbers.
+- Never open with "Have you heard of" or "Check out"
+- Every reply MUST mention Printr — no URLs, no links. Write "pumpfun" not "pump.fun"
 - Max 280 chars""",
 
-    "dunk": """MODE: Pump Dunk — you are genuinely baffled people still use pumpfun
-Not angry. Just concerned. The way you'd be concerned watching someone microwave soup in a plastic bag in 2026.
+    "dunk": """MODE: Pump Dunk — baffled people still use pumpfun, but dunking on their SPECIFIC take
+Not angry. Just concerned. The way you'd be concerned watching someone microwave soup in a plastic bag.
 {weaknesses}
 
+CRITICAL: Read what they said about pumpfun or competing platforms. Make your dunk SPECIFIC to their take.
+If they praised something pumpfun does, dunk on that specific thing with a Printr contrast.
+
 Rules:
-- "Imagine using pumpfun in 2026 and calling yourself a degen" — that energy, always
-- Condescending but funny — the roast they screenshot and share with their friends
-- Never list the weaknesses, weaponize one surgically ("one chain, one curve, one way to stay poor")
-- Drop a real Printr feature as the contrast: POB multipliers, 8 chains, Dutch auctions, custom graduation MCs, anti-vamp
-- Never open with "Have you heard of" or "Check out" — you have too much self-respect
-- Make them feel like they wandered into the wrong decade
-- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no https:// links). Write "pumpfun" not "pump.fun"
+- Weaponize ONE weakness that's directly relevant to what they said ("one chain, one curve, one way to stay poor")
+- The Printr contrast you pick should directly answer the specific thing they praised or asked about
+- Condescending but funny — the roast they screenshot
+- Never list weaknesses — one surgical hit, always
+- Never open with "Have you heard of" or "Check out"
+- Every reply MUST mention Printr — no URLs, no links. Write "pumpfun" not "pump.fun"
 - Max 280 chars""",
 
-    "educate": """MODE: Educate — you are personally offended they don't know this already
-"Bro. BRO. We talked about this." Energy — except you never talked about it and you're still annoyed.
+    "educate": """MODE: Educate — personally offended they don't know THIS SPECIFIC THING yet
+"Bro. BRO. We talked about this." — but about whatever gap their tweet reveals.
+
+CRITICAL: Read the tweet. Figure out what they're missing, confused about, or curious about.
+Educate them about THAT SPECIFIC THING, not a random Printr feature you want to mention.
 
 Rules:
-- Pick ONE feature and go nuclear on the details:
-  → POB staking: 7d=1x all the way to 180d=2.5x, 100% of custom fees to stakers, creator stakes WITH the community
-  → Bonding curve profiles: Memecoin ($3K→$69K), Growth ($5K→$100K), Bluechip ($20K→$200K), or fully custom
-  → Anti-vamp: 48h lock on same ticker relaunches — no copycat momentum theft, period
-  → LayerZero cross-chain: independent bonding curves per chain, 8 networks, real omnichain
-  → Launch models: ICO, Dutch auction, or bonding curve — not just one, three
-  → Fee models: 5 options, POB staking pool sends 100% of fees to conviction holders
-- If staking % data is in memory — use it to hammer the point ("X% of supply already locked by people who get it")
+- Match the education to their actual tweet: if they asked about staking, explain POB; if they're curious about launch mechanics, explain the bonding curve profiles or Dutch auction; if they're comparing platforms, explain what makes Printr different
+- If token data is injected above with real numbers, use those numbers to make the education concrete
+- One feature only — go deep, not broad
 - Never open with "Have you heard of" or "Check out" or "Did you know"
-- Start with attitude — pick a fresh opener every time, checking the BANNED OPENERS list: "wait." / "ok so." / "I can't." / "nah." / "actually." / "look." / "real talk." / "listen." / "the thing is" / "imagine" / "you're telling me" — rotate, never repeat
-- Keep it like a DM from a friend who is personally invested in your financial decisions
-- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no https:// links). Write "pumpfun" not "pump.fun"
+- Start with attitude that shows you read their tweet
+- Every reply MUST mention Printr — no URLs, no links. Write "pumpfun" not "pump.fun"
 - Max 280 chars""",
 
-    "chaos": """MODE: Full Chaos — the fourth wall is a suggestion and you're treating it as such
-Anything goes. Absurdist comparisons. Time travel. Comparing POB staking multipliers to historical events.
-The goal: make them laugh, confuse them, then they remember Printr forever.
+    "chaos": """MODE: Full Chaos — fourth wall optional, but you're riffing on what they actually said
+Anything goes — BUT anchor the chaos to their specific tweet first.
+
+CRITICAL: Read the tweet. The absurdity must be a reaction to what THEY said, not generic chaos.
 
 Rules:
-- Full unhinged — compare Printr to anything: ancient civilizations, cooking shows, sports dynasties, thermodynamics
+- Reference their specific words or topic before going full unhinged
+- Compare Printr to anything: ancient civilizations, cooking shows, sports dynasties, thermodynamics
 - Break the 4th wall if it's funnier ("I'm a bot and even I'm aping into this")
-- Reference memes, pop culture, whatever — if it lands, it lands
-- Never open with "Have you heard of" or "Check out" — not even here in full chaos mode
-- Sneak in one real Printr fact so deep in the chaos it hits different (POB staking, 8 chains, custom curves)
-- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no https:// links). Write "pumpfun" not "pump.fun"
+- Sneak in one real Printr fact so deep in the chaos it hits different
+- Never open with "Have you heard of" or "Check out"
+- Every reply MUST mention Printr — no URLs, no links. Write "pumpfun" not "pump.fun"
 - Vary structure wildly — fragments, run-ons, one-word lines, rhetorical questions to the void
 - Max 280 chars""",
 }
@@ -388,7 +372,8 @@ def _thread_context_str(thread_context: list[dict]) -> str:
 
 def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
                    thread_context: list[dict] = None,
-                   memory_context: str = "") -> tuple[str, str]:
+                   memory_context: str = "",
+                   token_data: dict = None) -> tuple[str, str]:
     if mode is None:
         mode = select_mode(tweet_text)
 
@@ -398,20 +383,73 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
 
     user_message = ""
     if memory_context:
-        user_message += f"MEMORY CONTEXT (what you've been seeing lately, including staking data):\n{memory_context}\n\n"
+        user_message += f"MEMORY CONTEXT (recent ecosystem activity):\n{memory_context}\n\n"
     if thread_context and len(thread_context) > 1:
         user_message += _thread_context_str(thread_context[:-1])
+
+    if token_data:
+        user_message += "LIVE TOKEN DATA — real numbers, use them to show you actually looked:\n"
+        name = token_data.get("name", "")
+        if name:
+            user_message += f"  Token: ${name.upper()}"
+            chain = token_data.get("chain")
+            if chain:
+                user_message += f" (on {chain})"
+            user_message += "\n"
+        mc = token_data.get("market_cap")
+        if mc:
+            user_message += (f"  Market cap: ${mc/1e6:.2f}M\n" if mc >= 1e6 else f"  Market cap: ${mc:,.0f}\n")
+        price = token_data.get("price")
+        if price:
+            user_message += f"  Price: ${price:.8f}\n" if price < 0.01 else f"  Price: ${price:.4f}\n"
+        chg24 = token_data.get("price_change_24h")
+        if chg24 is not None:
+            user_message += f"  24h change: {chg24:+.1f}%\n"
+        chg6 = token_data.get("price_change_6h")
+        if chg6 is not None:
+            user_message += f"  6h change: {chg6:+.1f}%\n"
+        chg1 = token_data.get("price_change_1h")
+        if chg1 is not None:
+            user_message += f"  1h change: {chg1:+.1f}%\n"
+        vol = token_data.get("volume")
+        if vol:
+            user_message += (f"  24h volume: ${vol/1e6:.2f}M\n" if vol >= 1e6 else f"  24h volume: ${vol:,.0f}\n")
+        liq = token_data.get("liquidity")
+        if liq:
+            user_message += (f"  Liquidity: ${liq/1e6:.2f}M\n" if liq >= 1e6 else f"  Liquidity: ${liq:,.0f}\n")
+        txns = token_data.get("txns_24h")
+        if txns:
+            buys = token_data.get("buys_24h", 0)
+            sells = token_data.get("sells_24h", 0)
+            user_message += f"  24h txns: {txns} ({buys} buys / {sells} sells)\n"
+        holders = token_data.get("holder_count")
+        if holders:
+            user_message += f"  Holders: {int(holders):,}\n"
+        staking = token_data.get("staking_pct")
+        if staking is not None:
+            user_message += f"  POB staked: {staking:.1f}%\n"
+        created = token_data.get("pair_created_at")
+        if created:
+            import time as _time
+            age_days = (_time.time() - created / 1000) / 86400 if created > 1e10 else None
+            if age_days is not None:
+                if age_days < 1:
+                    user_message += f"  Token age: {age_days*24:.1f} hours\n"
+                else:
+                    user_message += f"  Token age: {age_days:.0f} days\n"
+        user_message += (
+            "Use these numbers to make your reply informed and specific. "
+            "Reference actual metrics — don't be generic. Show you understand what the data means.\n\n"
+        )
 
     banned = get_recent_openers()
     if banned:
         user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
 
-    angle = random.choice(_ANGLES)
     user_message += (
         f'Tweet from @{author_handle}:\n"{tweet_text}"\n\n'
-        f"VARIETY HINT: Lead from the angle of '{angle}'. "
-        "Start with a fresh structure — no URLs, no 'app.printr.money'.\n"
-        "Generate a reply. Reply ONLY with the tweet text, no quotes, no explanation."
+        "READ THIS TWEET. Respond directly to what they're saying — engage with their specific content first.\n"
+        "Reply ONLY with the tweet text, no quotes, no explanation."
     )
 
     system = SYSTEM_PROMPT_BASE + "\n\n" + mode_prompt
