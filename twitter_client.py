@@ -154,6 +154,15 @@ def _clean_tweet(text: str) -> str:
     return text[:280]
 
 
+def _log_post_error(action: str, e: tweepy.TweepyException) -> None:
+    codes = getattr(e, "api_codes", [])
+    msgs = getattr(e, "api_messages", [])
+    if codes or msgs:
+        logger.error(f"{action}: {e} | twitter_codes={codes} | twitter_messages={msgs}")
+    else:
+        logger.error(f"{action}: {e}")
+
+
 def post_reply(reply_text: str, in_reply_to_tweet_id: str, media_path: str | None = None) -> str | None:
     client = get_v2_client()
     clean = _clean_tweet(reply_text)
@@ -167,7 +176,7 @@ def post_reply(reply_text: str, in_reply_to_tweet_id: str, media_path: str | Non
         logger.info(f"Posted reply {tweet_id} (media={'yes' if media_path else 'no'}): {clean[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
-        logger.error(f"Failed to post reply: {e}")
+        _log_post_error("Failed to post reply", e)
         return None
 
 
@@ -180,7 +189,7 @@ def post_tweet(text: str, media_path: str | None = None) -> str | None:
         logger.info(f"Posted original tweet {tweet_id} (media={'yes' if media_path else 'no'}): {clean[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
-        logger.error(f"Failed to post tweet: {e}")
+        _log_post_error("Failed to post tweet", e)
         return None
 
 
@@ -193,7 +202,7 @@ def post_quote_tweet(text: str, quote_tweet_id: str, media_path: str | None = No
         logger.info(f"Posted quote tweet {tweet_id} (media={'yes' if media_path else 'no'}): {clean[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
-        logger.error(f"Failed to post quote tweet: {e}")
+        _log_post_error("Failed to post quote tweet", e)
         return None
 
 
@@ -370,17 +379,32 @@ class GlazePrintrStream(tweepy.StreamingClient):
         )
         self._on_tweet = on_tweet_callback
 
-    def on_tweet(self, tweet):
+    def on_response(self, response):
+        if response.errors:
+            self.on_errors(response.errors)
+
+        tweet = response.data
+        if tweet is None:
+            return
+
+        users = {}
+        if response.includes and "users" in response.includes:
+            for u in response.includes["users"]:
+                users[u.id] = u.username
+
         in_reply_to_tweet_id = None
         for ref in (getattr(tweet, "referenced_tweets", None) or []):
             if hasattr(ref, "type") and ref.type == "replied_to":
                 in_reply_to_tweet_id = str(ref.id)
                 break
+
+        author_handle = users.get(tweet.author_id, "unknown") if tweet.author_id else "unknown"
+
         self._on_tweet({
             "id": str(tweet.id),
             "text": tweet.text,
             "author_id": str(tweet.author_id) if tweet.author_id else "",
-            "author_handle": "stream_user",
+            "author_handle": author_handle,
             "in_reply_to_tweet_id": in_reply_to_tweet_id,
             "created_at": getattr(tweet, "created_at", None),
         })

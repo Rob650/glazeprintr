@@ -278,7 +278,7 @@ def score_tweet(tweet: dict, thread_context: list[dict] | None = None):
 
 
 def _handle_tweet(tweet: dict):
-    """Fetch full thread context once, classify intent, then route to score card or reply."""
+    logger.info(f"Processing tweet {tweet['id']} from @{tweet.get('author_handle', 'unknown')}: {tweet.get('text', '')[:80]}")
     thread_context = _get_thread_context(tweet)
 
     try:
