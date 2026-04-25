@@ -1,7 +1,37 @@
 import os
 import json
 import random
+import re
 import anthropic
+
+# Strips any URLs Claude sneaks in despite prompt instructions
+_URL_RE = re.compile(r'https?://\S+|\bapp\.printr\.money\S*', re.IGNORECASE)
+
+# Angles cycled through to force variety across reply calls
+_ANGLES = [
+    "specific on-chain token stat",
+    "POB staking mechanics deep-dive",
+    "competitor comparison (pump.fun weakness)",
+    "creator tools or AI/MCP angle",
+    "8-chain omnichain infrastructure",
+    "anti-vamp protection",
+    "fee distribution model",
+    "community conviction / lock multiplier",
+    "Dutch auction or ICO launch model",
+    "personal conviction / FOMO angle",
+]
+
+
+def _clean_reply(text: str) -> str:
+    """Strip URLs, clean whitespace, append 🙏 if it fits within 280 chars."""
+    text = _URL_RE.sub('', text)
+    text = re.sub(r'[ \t]+', ' ', text).strip()
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    if '🙏' not in text:
+        candidate = text + '\n🙏'
+        if len(candidate) <= 280:
+            text = candidate
+    return text[:280]
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "YOUR_ANTHROPIC_API_KEY_HERE")
 
@@ -73,8 +103,11 @@ HARD RULES:
 - Never reply to yourself (@printrglazr)
 - Never be mean to real people — dunk on platforms and bad takes, not humans
 - NEVER open with "Have you heard of", "Check out", or any generic opener
-- Never start two replies the same way — you're not a template
+- NEVER start two replies the same way — you are not a template, you are a voice
+- VARY YOUR OPENING every single time: rotate between a hot take, a data point, a rhetorical question, a competitor jab, a conviction statement, an absurdist observation, a direct challenge — never the same structure twice
+- VARY YOUR TOPIC: cycle through staking mechanics, specific token stats, competitor weakness, 8-chain infra, fee models, anti-vamp, creator tools, community conviction, launch models — don't always lead with POB
 - Vary sentence structure — mix short punchy lines with longer unhinged takes
+- FORBIDDEN openings to avoid repeating: "ser" in every tweet, "imagine" back to back, "bro" twice in a row, leading with "POB staking" consecutively — mix it up
 - Use CT slang naturally: ngmi, wagmi, ser, based, cooked, rekt, aping, conviction, degen, sending it, locked in, goblin mode, no cap
 - Every reply must mention Printr by name
 - NEVER include URLs or website links in your tweets or replies — no app.printr.money, no dune.com/..., no printr.money links, nothing. Reference the data but never paste a URL.
@@ -322,8 +355,11 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
     if thread_context and len(thread_context) > 1:
         user_message += _thread_context_str(thread_context[:-1])
 
+    angle = random.choice(_ANGLES)
     user_message += (
         f'Tweet from @{author_handle}:\n"{tweet_text}"\n\n'
+        f"VARIETY HINT: Lead from the angle of '{angle}'. "
+        "Start with a fresh structure — no URLs, no 'app.printr.money'.\n"
         "Generate a reply. Reply ONLY with the tweet text, no quotes, no explanation."
     )
 
@@ -335,9 +371,8 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
             system,
             user_message + "\n\nIMPORTANT: Must be under 280 characters.",
         )
-        reply = reply[:280]
 
-    return reply, mode
+    return _clean_reply(reply), mode
 
 
 def generate_original_tweet(market_data: list[dict] = None, memory_context: str = "") -> str:
@@ -402,8 +437,7 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
             user_message + "\n\nIMPORTANT: Must be under 280 characters.",
             max_tokens=200,
         )
-        tweet = tweet[:280]
-    return tweet
+    return _URL_RE.sub('', tweet).strip()[:280]
 
 
 def score_glaze(
