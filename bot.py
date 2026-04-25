@@ -1,6 +1,8 @@
 import os
 import asyncio
 import logging
+import random
+import re
 import threading
 from datetime import datetime, timezone, timedelta
 
@@ -18,7 +20,10 @@ from claude_client import (
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
-    setup_stream_rules, GlazePrintrStream, fetch_tweet_chain,
+    setup_stream_rules, GlazePrintrStream, fetch_tweet_chain, fetch_tweet_media_url,
+)
+from image_generator import (
+    generate_glaze_score_card, generate_ecosystem_stats_card, remix_tweet_image,
 )
 import memory as mem
 from scraper import scrape_all_data
@@ -48,6 +53,40 @@ _stream_instance: GlazePrintrStream | None = None
 SKIP_HANDLES = {"printrglazr", "printr_money"}
 MAX_MENTION_AGE_MINUTES = 10
 MAX_LIST_AGE_HOURS = 24
+
+# Probability of attaching images (40% of eligible tweets get images)
+IMAGE_ORIGINAL_PROB = 0.40
+IMAGE_REPLY_PROB = 0.40
+
+ECOSYSTEM_TOKENS = [
+    "belief", "ooo", "rotus", "fatchoi", "deployr", "patapim",
+    "roi", "noob", "print", "cmyk", "pve", "ket", "fsjal", "marmot",
+]
+
+_latest_projects: list[dict] = []
+
+
+def _extract_token(text: str, extra: str = "") -> str:
+    combined = (text + " " + extra).lower()
+    for tok in ECOSYSTEM_TOKENS:
+        if f"${tok}" in combined:
+            return tok
+    m = re.search(r"\$([a-zA-Z]{2,12})", combined)
+    return m.group(1).lower() if m else ""
+
+
+def _get_token_metrics(token_name: str) -> dict | None:
+    if not token_name or not _latest_projects:
+        return None
+    for proj in _latest_projects:
+        if proj.get("name", "").lower() == token_name.lower():
+            return {
+                "staking_pct": proj.get("staking_pct"),
+                "market_cap": proj.get("market_cap"),
+                "volume": proj.get("volume"),
+                "price_change_24h": proj.get("price_change_24h"),
+            }
+    return None
 
 
 def _is_recent_tweet(tweet: dict, max_age_minutes: int) -> bool:
@@ -127,14 +166,27 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
         logger.error(f"Claude error for tweet {tweet['id']}: {e}")
         return
 
+    # Optionally remix source image (40% chance, only if tweet has media)
+    img_path = None
+    if random.random() < IMAGE_REPLY_PROB:
+        source_media_url = tweet.get("media_url")
+        if not source_media_url and tweet.get("in_reply_to_tweet_id"):
+            source_media_url = fetch_tweet_media_url(tweet["in_reply_to_tweet_id"])
+        if source_media_url:
+            token = _extract_token(tweet_text)
+            try:
+                img_path = remix_tweet_image(source_media_url, token_name=token)
+            except Exception as e:
+                logger.debug(f"Meme remix failed: {e}")
+
     our_reply_id = None
     if DRY_RUN:
         logger.info(
             f"[DRY RUN] Would reply to @{author_handle} ({tweet['id']}) "
-            f"mode={mode}: {reply_text[:80]}..."
+            f"mode={mode} img={'yes' if img_path else 'no'}: {reply_text[:80]}..."
         )
     else:
-        our_reply_id = post_reply(reply_text, tweet["id"])
+        our_reply_id = post_reply(reply_text, tweet["id"], media_path=img_path)
         if not our_reply_id:
             logger.warning(f"Failed to post reply to {tweet['id']}")
             return
@@ -188,16 +240,25 @@ def score_tweet(tweet: dict, thread_context: list[dict] | None = None):
 
     score, tier, score_card = result
 
+    # Always generate a score card image
+    token_name = _extract_token(tweet_text, score_card)
+    metrics = _get_token_metrics(token_name)
+    img_path = None
+    try:
+        img_path = generate_glaze_score_card(score, tier, token_name, score_card, metrics)
+    except Exception as e:
+        logger.warning(f"Score card image generation failed: {e}")
+
     if DRY_RUN:
         logger.info(
-            f"[DRY RUN] Glaze score @{author_handle}: {score}/100 [{tier}] — "
+            f"[DRY RUN] Glaze score @{author_handle}: {score}/100 [{tier}] img={'yes' if img_path else 'no'} — "
             f"{score_card[:60]}..."
         )
         record_score(tweet_id, author_handle, score, tier, score_card, None, dry_run=True)
     else:
-        quote_id = post_quote_tweet(score_card, tweet_id)
+        quote_id = post_quote_tweet(score_card, tweet_id, media_path=img_path)
         record_score(tweet_id, author_handle, score, tier, score_card, quote_id, dry_run=False)
-        logger.info(f"Glaze scored @{author_handle}: {score}/100 [{tier}]")
+        logger.info(f"Glaze scored @{author_handle}: {score}/100 [{tier}] img={'yes' if img_path else 'no'}")
 
 
 def _handle_tweet(tweet: dict):
@@ -263,6 +324,7 @@ def poll_list():
 
 
 async def post_original_tweet():
+    global _latest_projects
     if is_paused():
         logger.info("Bot paused — skipping original tweet job")
         return
@@ -270,6 +332,7 @@ async def post_original_tweet():
     logger.info("Running original tweet job...")
     try:
         projects = await scrape_all_data()
+        _latest_projects = projects  # cache for score card metric lookups
 
         for proj in projects:
             if proj.get("contract_address") or proj.get("market_cap"):
@@ -287,14 +350,22 @@ async def post_original_tweet():
         memory_context = mem.get_memory_context()
         tweet_text = generate_original_tweet(market_data=projects, memory_context=memory_context)
 
+        # 40% chance to attach ecosystem stats card
+        img_path = None
+        if random.random() < IMAGE_ORIGINAL_PROB:
+            try:
+                img_path = generate_ecosystem_stats_card(projects)
+            except Exception as e:
+                logger.warning(f"Ecosystem stats card failed: {e}")
+
         if DRY_RUN:
-            logger.info(f"[DRY RUN] Original tweet: {tweet_text}")
+            logger.info(f"[DRY RUN] Original tweet img={'yes' if img_path else 'no'}: {tweet_text}")
             record_original_tweet("dry_run", tweet_text, dry_run=True)
         else:
-            tweet_id = post_tweet(tweet_text)
+            tweet_id = post_tweet(tweet_text, media_path=img_path)
             if tweet_id:
                 record_original_tweet(tweet_id, tweet_text, dry_run=False)
-                logger.info(f"Posted original tweet {tweet_id}: {tweet_text[:60]}...")
+                logger.info(f"Posted original tweet {tweet_id} img={'yes' if img_path else 'no'}: {tweet_text[:60]}...")
             else:
                 logger.warning("Failed to post original tweet")
     except Exception as e:
