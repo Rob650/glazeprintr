@@ -137,11 +137,15 @@ def fetch_mentions(since_id: str | None = None) -> list[dict]:
         return []
 
 
+def _append_prayer(text: str) -> str:
+    return text if text.rstrip().endswith("🙏") else text.rstrip() + " 🙏"
+
+
 def post_reply(reply_text: str, in_reply_to_tweet_id: str, media_path: str | None = None) -> str | None:
     client = get_v2_client()
     try:
         response = client.create_tweet(
-            text=reply_text,
+            text=_append_prayer(reply_text),
             in_reply_to_tweet_id=in_reply_to_tweet_id,
             **_media_kwargs(media_path),
         )
@@ -156,7 +160,7 @@ def post_reply(reply_text: str, in_reply_to_tweet_id: str, media_path: str | Non
 def post_tweet(text: str, media_path: str | None = None) -> str | None:
     client = get_v2_client()
     try:
-        response = client.create_tweet(text=text, **_media_kwargs(media_path))
+        response = client.create_tweet(text=_append_prayer(text), **_media_kwargs(media_path))
         tweet_id = response.data["id"]
         logger.info(f"Posted original tweet {tweet_id} (media={'yes' if media_path else 'no'}): {text[:60]}...")
         return tweet_id
@@ -168,7 +172,7 @@ def post_tweet(text: str, media_path: str | None = None) -> str | None:
 def post_quote_tweet(text: str, quote_tweet_id: str, media_path: str | None = None) -> str | None:
     client = get_v2_client()
     try:
-        response = client.create_tweet(text=text, quote_tweet_id=quote_tweet_id, **_media_kwargs(media_path))
+        response = client.create_tweet(text=_append_prayer(text), quote_tweet_id=quote_tweet_id, **_media_kwargs(media_path))
         tweet_id = response.data["id"]
         logger.info(f"Posted quote tweet {tweet_id} (media={'yes' if media_path else 'no'}): {text[:60]}...")
         return tweet_id
