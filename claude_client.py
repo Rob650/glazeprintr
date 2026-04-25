@@ -21,6 +21,40 @@ _ANGLES = [
     "personal conviction / FOMO angle",
 ]
 
+# Topic focuses for original tweets — picked randomly each call to prevent $BELIEF monopoly
+_ORIGINAL_TWEET_TOPICS = [
+    ("belief_staking",
+     "Focus on $BELIEF's POB staking percentage and what it means for supply conviction. Lead with the staking number if available."),
+    ("fatchoi_spotlight",
+     "Spotlight $FATCHOI specifically — its stats, momentum, or staking conviction. Do NOT mention $BELIEF."),
+    ("underrated_token",
+     "Pick ONE of these smaller ecosystem tokens and give it a spotlight — $OOO, $ROTUS, $DEPLOYR, $PATAPIM, $ROI, $NOOB, $CMYK, $PVE, $KET, $FSJAL, or $MARMOT. Focus entirely on that token."),
+    ("staking_leaderboard",
+     "Compare staking percentages across multiple ecosystem tokens. Frame it as a conviction ranking — who's most locked in vs. who's leaving gains on the table."),
+    ("biggest_mover",
+     "Lead with the single biggest 24h price mover in the ecosystem. Make the % change the headline — not the token name."),
+    ("platform_mechanics",
+     "Tweet about a specific Printr platform mechanic with no token focus: POB staking tiers (7d=1x → 180d=2.5x), bonding curve graduation thresholds, Dutch auction price discovery, or the 5 fee models."),
+    ("8_chains",
+     "Lead with Printr's 8-chain omnichain infrastructure and LayerZero OFTs. Make multi-chain the whole story — no single token focus."),
+    ("pump_fun_dunk",
+     "Unprompted dunk on pump.fun — not replying to anyone, just pure 'I can't believe people still use this in 2026' energy. One sharp contrast with a specific Printr feature."),
+    ("fee_distribution",
+     "Deep dive the fee distribution math: POB pool routes 100% of custom fees to stakers, creator stakes alongside community, 180d = 2.5x multiplier. Make the math alarming."),
+    ("anti_vamp",
+     "Lead with anti-vamp protection — 48h same-ticker relaunch lock — and what it means for serious launches vs the copycat hellscape everywhere else."),
+    ("ecosystem_overview",
+     "Broad ecosystem snapshot: multiple tokens, aggregate conviction, ecosystem health. Name at least 3 different tokens. Big-picture view, not a single-token post."),
+    ("creator_tools",
+     "Angle on Printr's developer and creator tools: MCP server for AI agents, TypeScript SDK, white-label API. Who is actually building with this infrastructure."),
+    ("market_comparison",
+     "Compare two different ecosystem tokens head-to-head using the market data — staking %, MC, 24h momentum. Let the data do the talking."),
+    ("print_token",
+     "Spotlight $PRINT, the native ecosystem token. Its role, the EVM vs Solana addresses, what holding it means for the ecosystem."),
+    ("conviction_math",
+     "Do the lock multiplier math out loud: someone who locks 180d earns 2.5x vs someone at 7d. Frame it in real terms — what that gap means for fee revenue share."),
+]
+
 
 def _clean_reply(text: str) -> str:
     """Strip URLs and normalize whitespace. 🙏 is appended at the posting layer."""
@@ -192,24 +226,25 @@ Rules:
 ORIGINAL_TWEET_PROMPT = """MODE: Original Tweet — you have data, you have opinions, you're going to share both aggressively
 You've seen the numbers. You have context. You're posting with the energy of someone who locked 180 days and watches the fee revenue come in.
 
+CRITICAL: A TOPIC FOCUS will be injected into the user message. You MUST write about that specific topic/angle. Do NOT default to $BELIEF just because it's the biggest token — the injected topic overrides everything. Each tweet must be about something different.
+
 Rules:
-- Lead with the most alarming or exciting data point — if someone could scroll past this, you failed
+- FOLLOW THE INJECTED TOPIC FOCUS — this is the specific angle you must use, not a suggestion
+- Lead with the most alarming or exciting data point for that topic — if someone could scroll past this, you failed
 - Use actual numbers: market caps, % changes, volumes, and STAKING PERCENTAGES when available
-- Staking % is content gold — use it:
-  "$BELIEF has 73% of supply locked in POB staking — that's not a token, that's a covenant"
-  "only 12% staked on this one... room to run or room to dump, you decide"
-  "67% of $BELIEF supply locked in POB. the circulating supply is basically a formality at this point"
-- Hard glaze $belief and $fatchoi especially, plus the biggest movers
+- Staking % is content gold — use it (for the token in the topic, not always $BELIEF):
+  "$FATCHOI has 61% of supply in POB staking — that's not a token, that's a lockdown"
+  "only 12% staked on $DEPLOYR... room to run or room to dump, you decide"
+  "compare the staking ranks: $BELIEF 73%, $OOO 44%, $ROTUS 29% — conviction gap is wild"
 - Drop real Printr mechanics naturally (POB staking tiers, bonding curve graduation, 8 chains, LayerZero, custom fees)
 - NEVER include any URLs, links, or website addresses. No app.printr.money, no pump.fun, no https:// links of any kind. Reference data and the platform by name only — never paste a URL.
-- NEVER start tweets the same way. Vary your opening words, structure, and angle every single time.
+- NEVER start tweets the same way. Every tweet must open differently — different structure, different token, different angle.
 - Tone examples:
-  "you're literally watching generational wealth form and tweeting about dog coins instead"
-  "imagine not being in $belief rn... couldn't be me, won't be me, was never gonna be me"
-  "POB stakers eating so good rn they need napkins for their wallets"
-  "if you're not locked 180 days you're basically donating alpha to people who are"
   "while you were sleeping $fatchoi did +40%. the 180-day POB stakers were already printing."
   "8 chains. custom bonding curves. 5 fee models. dutch auctions. printr built what the whole space needed and y'all are still on one-trick platforms"
+  "lock multiplier math: 180d staker earns 2.5x vs a 7d staker on the same position. the gap compounds. the ngmi are already ngmi."
+  "pump.fun gave you one bonding curve and called it a platform. printr gave you 8 chains, 5 fee models, and Dutch auctions. not the same sport."
+  "$ROTUS quietly building conviction — 38% staked, 8-chain launch, and nobody's talking about it yet"
 - Never use hashtags unless they're ecosystem tickers
 - No corporate speak. No "exciting news." No "thrilled to announce." No "we're pleased to share."
 - NEVER mention Virtuals
@@ -423,8 +458,12 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
                 data_lines.append(line)
         user_message += "\n".join(data_lines) + "\n\n"
 
+    _topic_key, topic_instruction = random.choice(_ORIGINAL_TWEET_TOPICS)
     user_message += (
-        "Generate an original tweet. Reply ONLY with the tweet text, no quotes, no explanation."
+        f"TOPIC FOCUS FOR THIS TWEET: {topic_instruction}\n"
+        "Do NOT default to $BELIEF unless the topic explicitly requires it.\n\n"
+        "Generate an original tweet following the TOPIC FOCUS above. "
+        "Reply ONLY with the tweet text, no quotes, no explanation."
     )
 
     tweet = _call_claude(system, user_message, max_tokens=200)
