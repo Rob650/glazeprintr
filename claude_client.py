@@ -3,6 +3,7 @@ import json
 import random
 import re
 import anthropic
+from database import get_recent_openers, add_opener
 
 # Strips any URLs Claude sneaks in despite prompt instructions
 _URL_RE = re.compile(r'https?://\S+|\bapp\.printr\.money\S*|\bpump\.fun\S*', re.IGNORECASE)
@@ -62,6 +63,13 @@ def _clean_reply(text: str) -> str:
     text = re.sub(r'[ \t]+', ' ', text).strip()
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text[:280]
+
+
+def _extract_opener(text: str) -> str:
+    """Return the first word of a tweet, lowercased and stripped of punctuation."""
+    if not text:
+        return ""
+    return text.strip().split()[0].lower().rstrip(".,!?:")
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "YOUR_ANTHROPIC_API_KEY_HERE")
 
@@ -133,11 +141,11 @@ HARD RULES:
 - Never reply to yourself (@printrglazr)
 - Never be mean to real people — dunk on platforms and bad takes, not humans
 - NEVER open with "Have you heard of", "Check out", or any generic opener
-- NEVER start two replies the same way — you are not a template, you are a voice
+- NEVER start two tweets with the same opening word — a BANNED OPENERS list is injected into every prompt, never use any word on that list as your first word
 - VARY YOUR OPENING every single time: rotate between a hot take, a data point, a rhetorical question, a competitor jab, a conviction statement, an absurdist observation, a direct challenge — never the same structure twice
 - VARY YOUR TOPIC: cycle through staking mechanics, specific token stats, competitor weakness, 8-chain infra, fee models, anti-vamp, creator tools, community conviction, launch models — don't always lead with POB
 - Vary sentence structure — mix short punchy lines with longer unhinged takes
-- FORBIDDEN openings to avoid repeating: "ser" in every tweet, "imagine" back to back, "bro" twice in a row, leading with "POB staking" consecutively — mix it up
+- OPENER VARIETY IS NON-NEGOTIABLE: if you start with "bro" once, the next tweet cannot start with "bro". Same rule for every word — "ser", "imagine", "nah", "wait", "yo", "ok", "honestly", "look", "real" — rotate constantly
 - Use CT slang naturally: ngmi, wagmi, ser, based, cooked, rekt, aping, conviction, degen, sending it, locked in, goblin mode, no cap
 - Every reply must mention Printr by name
 - NEVER include any URLs, links, or website addresses in your response. No app.printr.money, no pump.fun, no https:// links of any kind. Reference data and platforms by name only — never paste a URL.
@@ -203,7 +211,7 @@ Rules:
   → Fee models: 5 options, POB staking pool sends 100% of fees to conviction holders
 - If staking % data is in memory — use it to hammer the point ("X% of supply already locked by people who get it")
 - Never open with "Have you heard of" or "Check out" or "Did you know"
-- Start with attitude: "ser..." / "bro." / "wait." / "ok so." / "I can't." — then drop the actual knowledge
+- Start with attitude — pick a fresh opener every time, checking the BANNED OPENERS list: "wait." / "ok so." / "I can't." / "nah." / "actually." / "look." / "real talk." / "listen." / "the thing is" / "imagine" / "you're telling me" — rotate, never repeat
 - Keep it like a DM from a friend who is personally invested in your financial decisions
 - Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no pump.fun, no https:// links)
 - Max 280 chars""",
@@ -387,6 +395,10 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
     if thread_context and len(thread_context) > 1:
         user_message += _thread_context_str(thread_context[:-1])
 
+    banned = get_recent_openers()
+    if banned:
+        user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
+
     angle = random.choice(_ANGLES)
     user_message += (
         f'Tweet from @{author_handle}:\n"{tweet_text}"\n\n'
@@ -404,7 +416,11 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
             user_message + "\n\nIMPORTANT: Must be under 280 characters.",
         )
 
-    return _clean_reply(reply), mode
+    reply = _clean_reply(reply)
+    opener = _extract_opener(reply)
+    if opener:
+        add_opener(opener)
+    return reply, mode
 
 
 def generate_original_tweet(market_data: list[dict] = None, memory_context: str = "") -> str:
@@ -458,6 +474,10 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
                 data_lines.append(line)
         user_message += "\n".join(data_lines) + "\n\n"
 
+    banned = get_recent_openers()
+    if banned:
+        user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
+
     _topic_key, topic_instruction = random.choice(_ORIGINAL_TWEET_TOPICS)
     user_message += (
         f"TOPIC FOCUS FOR THIS TWEET: {topic_instruction}\n"
@@ -473,7 +493,11 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
             user_message + "\n\nIMPORTANT: Must be under 280 characters.",
             max_tokens=200,
         )
-    return _clean_reply(tweet)
+    tweet = _clean_reply(tweet)
+    opener = _extract_opener(tweet)
+    if opener:
+        add_opener(opener)
+    return tweet
 
 
 def score_glaze(

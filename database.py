@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import os
 from datetime import datetime, timezone
@@ -417,3 +418,25 @@ def get_list_since_id() -> str | None:
 
 def set_list_since_id(since_id: str):
     set_state("list_since_id", since_id)
+
+
+# --- recent openers tracking (prevents repeated opening words) ---
+
+def get_recent_openers(limit: int = 8) -> list[str]:
+    val = get_state("recent_openers")
+    if not val:
+        return []
+    try:
+        openers = json.loads(val)
+        return openers[-limit:] if len(openers) > limit else openers
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def add_opener(word: str, keep: int = 8):
+    openers = get_recent_openers(keep)
+    if word and word not in openers:
+        openers.append(word)
+    if len(openers) > keep:
+        openers = openers[-keep:]
+    set_state("recent_openers", json.dumps(openers))
