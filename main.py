@@ -213,7 +213,8 @@ async def api_trigger_tweet():
 @app.post("/api/trigger-mentions")
 async def api_trigger_mentions():
     logger.info("Manual mentions poll trigger via API")
-    asyncio.create_task(bot.poll_mentions())
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, bot.poll_mentions)
     return {"status": "triggered", "dry_run": DRY_RUN}
 
 
