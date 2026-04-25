@@ -159,8 +159,8 @@ def _scanlines(draw, W, H, alpha=14):
 
 
 def _save(img: Image.Image, path: Path) -> str:
-    rgb = img.convert("RGB")
-    rgb.save(str(path), "PNG", optimize=True)
+    out = img if img.mode == "RGB" else img.convert("RGB")
+    out.save(str(path), "PNG", optimize=True)
     return str(path)
 
 
@@ -175,8 +175,8 @@ def generate_glaze_score_card(
     _ensure_dirs()
     try:
         W, H = 1200, 675
-        img = Image.new("RGBA", (W, H), (*BG, 255))
-        draw = ImageDraw.Draw(img)
+        img = Image.new("RGB", (W, H), BG)
+        draw = ImageDraw.Draw(img, "RGBA")
 
         _grid_bg(draw, W, H)
 
@@ -297,8 +297,8 @@ def generate_ecosystem_stats_card(projects: list[dict]) -> str | None:
     _ensure_dirs()
     try:
         W, H = 1200, 675
-        img = Image.new("RGBA", (W, H), (*BG, 255))
-        draw = ImageDraw.Draw(img)
+        img = Image.new("RGB", (W, H), BG)
+        draw = ImageDraw.Draw(img, "RGBA")
 
         _grid_bg(draw, W, H)
         _neon_rect(draw, [8, 8, W-9, H-9], NEON_PURPLE, width=3)
@@ -398,7 +398,7 @@ def remix_tweet_image(image_url: str, token_name: str = "", score: int | None = 
         with urllib.request.urlopen(req, timeout=12) as resp:
             data = resp.read()
 
-        src = Image.open(io.BytesIO(data)).convert("RGBA")
+        src = Image.open(io.BytesIO(data)).convert("RGB")
 
         # Resize/crop to 1200x675
         W, H = 1200, 675
@@ -415,7 +415,7 @@ def remix_tweet_image(image_url: str, token_name: str = "", score: int | None = 
         top_px = (new_h - H) // 2
         src = src.crop((left, top_px, left + W, top_px + H))
 
-        draw = ImageDraw.Draw(src)
+        draw = ImageDraw.Draw(src, "RGBA")
 
         # Neon frame
         _neon_rect(draw, [8, 8, W-9, H-9], NEON_PURPLE, width=3)
