@@ -8,13 +8,16 @@ from database import set_stream_status
 
 logger = logging.getLogger(__name__)
 
-os.environ.setdefault("X_CONSUMER_KEY", "ktEoKBEXfP1lbbX28me3G8A6S")
-os.environ.setdefault("X_CONSUMER_SECRET", "rE0rF3rytVXHOWcFTykhbd7AlZuBurtx1jukv3ZA1Ea9893YnJ")
-os.environ.setdefault("X_BEARER_TOKEN", "AAAAAAAAAAAAAAAAAAAAABn29AEAAAAAKGQvXZeBG%2BACbPmzIavXy0nHv0s%3DeGCjisYzRkKvYmr7a4gspr7BLjTeKymEzJLWzdubFpo06NEbFg")
-os.environ.setdefault("X_ACCESS_TOKEN", "997357889927888898-K4DUwj3Wgpu1IoP8F3GA5OQrdQfVYNj")
-os.environ.setdefault("X_ACCESS_TOKEN_SECRET", "MS4UTY7G9S8QW7KgLTdELDAfZabGBR7dZxxs9ecppZCP8")
-os.environ.setdefault("X_CLIENT_ID", "RzVrN2tVbmtaYnBvV3J5TzZvUmY6MTpjaQ")
-os.environ.setdefault("X_CLIENT_SECRET", "63hVNoMiHwRNbbI8-uwIJikLSX138Nuo_iptr1Ix9mAzGD4kXd")
+_REQUIRED_ENV_VARS = [
+    "X_CONSUMER_KEY", "X_CONSUMER_SECRET", "X_BEARER_TOKEN",
+    "X_ACCESS_TOKEN", "X_ACCESS_TOKEN_SECRET",
+]
+_missing = [v for v in _REQUIRED_ENV_VARS if not os.environ.get(v)]
+if _missing:
+    logging.getLogger(__name__).error(
+        "Missing required Twitter API env vars: %s — Twitter client will not work",
+        ", ".join(_missing),
+    )
 
 _HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
 _PUMP_FUN_RE = re.compile(r'\bpump\.fun\S*', re.IGNORECASE)
