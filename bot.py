@@ -53,7 +53,7 @@ _stream_thread: threading.Thread | None = None
 _stream_instance: GlazePrintrStream | None = None
 
 SKIP_HANDLES = {"printrglazr", "printr_money"}
-MAX_MENTION_AGE_MINUTES = 10
+MAX_MENTION_AGE_MINUTES = 120
 MAX_LIST_AGE_HOURS = 1
 MAX_STREAM_AGE_MINUTES = 5
 
