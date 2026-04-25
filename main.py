@@ -210,6 +210,13 @@ async def api_trigger_tweet():
     return {"status": "triggered", "dry_run": DRY_RUN}
 
 
+@app.post("/api/trigger-mentions")
+async def api_trigger_mentions():
+    logger.info("Manual mentions poll trigger via API")
+    asyncio.create_task(bot.poll_mentions())
+    return {"status": "triggered", "dry_run": DRY_RUN}
+
+
 @app.post("/api/restart-stream")
 async def api_restart_stream():
     if not ENABLE_STREAM:
