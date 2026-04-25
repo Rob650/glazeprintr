@@ -31,6 +31,13 @@ def init_db():
         except Exception:
             pass  # Column already exists
 
+        # Migrate: add our_reply_tweet_id column to replied_tweets
+        try:
+            conn.execute("ALTER TABLE replied_tweets ADD COLUMN our_reply_tweet_id TEXT")
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS replied_tweets (
                 tweet_id TEXT PRIMARY KEY,
@@ -40,6 +47,7 @@ def init_db():
                 reply_text TEXT,
                 mode TEXT,
                 dry_run INTEGER DEFAULT 0,
+                our_reply_tweet_id TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             );
 
@@ -123,14 +131,44 @@ def has_replied(tweet_id: str) -> bool:
 
 
 def record_reply(tweet_id: str, author_id: str, author_handle: str,
-                 tweet_text: str, reply_text: str, mode: str, dry_run: bool):
+                 tweet_text: str, reply_text: str, mode: str, dry_run: bool,
+                 our_reply_tweet_id: str | None = None):
     with db() as conn:
         conn.execute(
             """INSERT OR IGNORE INTO replied_tweets
-               (tweet_id, author_id, author_handle, tweet_text, reply_text, mode, dry_run)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (tweet_id, author_id, author_handle, tweet_text, reply_text, mode, int(dry_run))
+               (tweet_id, author_id, author_handle, tweet_text, reply_text, mode, dry_run, our_reply_tweet_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (tweet_id, author_id, author_handle, tweet_text, reply_text, mode, int(dry_run), our_reply_tweet_id)
         )
+
+
+def is_reply_to_our_tweet(in_reply_to_tweet_id: str) -> bool:
+    """Returns True if in_reply_to_tweet_id is the ID of one of our reply tweets."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM replied_tweets WHERE our_reply_tweet_id = ?",
+            (in_reply_to_tweet_id,)
+        ).fetchone()
+        return row is not None
+
+
+def has_replied_to_author_in_chain(author_id: str, in_reply_to_tweet_id: str | None) -> bool:
+    """Returns True if we've already replied to this author AND the current tweet
+    is not a direct reply to one of our replies (i.e. they haven't responded to us)."""
+    if not author_id:
+        return False
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM replied_tweets WHERE author_id = ? LIMIT 1",
+            (author_id,)
+        ).fetchone()
+        if not row:
+            return False
+    # We have replied to this author before.
+    # Only allow if their tweet is a direct reply to one of our replies.
+    if in_reply_to_tweet_id and is_reply_to_our_tweet(in_reply_to_tweet_id):
+        return False  # They replied back to us — allow the reply
+    return True  # We've replied before and they haven't responded to us
 
 
 def get_recent_replies(limit: int = 20):

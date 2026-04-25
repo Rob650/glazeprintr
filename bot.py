@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import threading
+from datetime import datetime, timezone, timedelta
 
 from database import (
     has_replied, record_reply, count_replies_today,
@@ -9,6 +10,7 @@ from database import (
     set_stream_status, has_scored, record_score, count_scores_today,
     record_original_tweet, has_replied_mention, record_replied_mention,
     get_mentions_since_id, set_mentions_since_id,
+    has_replied_to_author_in_chain,
 )
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
@@ -44,6 +46,18 @@ _stream_thread: threading.Thread | None = None
 _stream_instance: GlazePrintrStream | None = None
 
 SKIP_HANDLES = {"printrglazr", "printr_money"}
+MAX_MENTION_AGE_MINUTES = 10
+MAX_LIST_AGE_HOURS = 24
+
+
+def _is_recent_tweet(tweet: dict, max_age_minutes: int) -> bool:
+    created_at = tweet.get("created_at")
+    if not created_at:
+        return True  # no timestamp — let it through rather than silently drop
+    if isinstance(created_at, str):
+        created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+    return created_at >= cutoff
 
 
 def _should_skip_reply(tweet: dict) -> tuple[bool, str]:
@@ -56,6 +70,11 @@ def _should_skip_reply(tweet: dict) -> tuple[bool, str]:
         return True, f"daily limit {MAX_REPLIES_PER_DAY} reached"
     if tweet.get("author_id") and count_replies_to_account_last_hour(tweet["author_id"]) >= MAX_REPLIES_PER_ACCOUNT_HOUR:
         return True, "hourly account limit reached"
+    # Don't reply again unless they replied directly to one of our replies
+    if tweet.get("author_id") and has_replied_to_author_in_chain(
+        tweet["author_id"], tweet.get("in_reply_to_tweet_id")
+    ):
+        return True, "already replied to this author in thread (no response from them)"
     return False, ""
 
 
@@ -108,14 +127,15 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
         logger.error(f"Claude error for tweet {tweet['id']}: {e}")
         return
 
+    our_reply_id = None
     if DRY_RUN:
         logger.info(
             f"[DRY RUN] Would reply to @{author_handle} ({tweet['id']}) "
             f"mode={mode}: {reply_text[:80]}..."
         )
     else:
-        result = post_reply(reply_text, tweet["id"])
-        if not result:
+        our_reply_id = post_reply(reply_text, tweet["id"])
+        if not our_reply_id:
             logger.warning(f"Failed to post reply to {tweet['id']}")
             return
 
@@ -127,6 +147,7 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
         reply_text=reply_text,
         mode=mode,
         dry_run=DRY_RUN,
+        our_reply_tweet_id=our_reply_id,
     )
     logger.info(
         f"{'[DRY] ' if DRY_RUN else ''}Replied to @{author_handle} "
@@ -215,6 +236,10 @@ def poll_mentions():
             if has_replied_mention(tweet["id"]):
                 logger.debug(f"Mention {tweet['id']} already processed — skip")
                 continue
+            if not _is_recent_tweet(tweet, MAX_MENTION_AGE_MINUTES):
+                logger.debug(f"Mention {tweet['id']} is older than {MAX_MENTION_AGE_MINUTES}m — skip")
+                record_replied_mention(tweet["id"], tweet.get("author_id", ""))
+                continue
             record_replied_mention(tweet["id"], tweet.get("author_id", ""))
             _handle_tweet(tweet)
 
@@ -231,6 +256,9 @@ def poll_list():
     if tweets:
         _list_poll_since_id = tweets[0]["id"]
         for tweet in tweets:
+            if not _is_recent_tweet(tweet, MAX_LIST_AGE_HOURS * 60):
+                logger.debug(f"List tweet {tweet['id']} is older than {MAX_LIST_AGE_HOURS}h — skip")
+                continue
             _handle_tweet(tweet)
 
 

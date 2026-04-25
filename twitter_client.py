@@ -91,6 +91,7 @@ def fetch_mentions(since_id: str | None = None) -> list[dict]:
                 "author_id": str(tweet.author_id),
                 "author_handle": users.get(tweet.author_id, "unknown"),
                 "in_reply_to_tweet_id": in_reply_to_tweet_id,
+                "created_at": tweet.created_at,
             })
         return tweets
     except tweepy.TweepyException as e:
@@ -172,6 +173,7 @@ def fetch_list_tweets(list_id: str, since_id: str | None = None) -> list[dict]:
                 "author_id": str(tweet.author_id),
                 "author_handle": users.get(tweet.author_id, "unknown"),
                 "in_reply_to_tweet_id": in_reply_to_tweet_id,
+                "created_at": tweet.created_at,
             })
         return tweets
     except tweepy.TweepyException as e:
