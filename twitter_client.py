@@ -232,12 +232,12 @@ def fetch_tweet_chain(tweet_id: str, max_depth: int = 5) -> list[dict]:
 
 
 def setup_stream_rules(keywords: list[str]):
-    client = get_v2_client()
+    streaming_client = tweepy.StreamingClient(bearer_token=os.environ.get("X_BEARER_TOKEN"))
     try:
-        existing = client.get_rules()
+        existing = streaming_client.get_rules()
         if existing.data:
             ids = [r.id for r in existing.data]
-            client.delete_rules(ids)
+            streaming_client.delete_rules(ids)
             logger.info(f"Deleted {len(ids)} existing stream rules")
     except tweepy.TweepyException as e:
         logger.error(f"Error clearing stream rules: {e}")
@@ -247,7 +247,7 @@ def setup_stream_rules(keywords: list[str]):
     rule += f" -is:retweet -from:{BOT_HANDLE}"
 
     try:
-        client.add_rules(tweepy.StreamRule(rule))
+        streaming_client.add_rules(tweepy.StreamRule(rule))
         logger.info(f"Added stream rule: {rule[:120]}...")
     except tweepy.TweepyException as e:
         logger.error(f"Failed to add stream rules: {e}")
