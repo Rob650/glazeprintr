@@ -272,9 +272,16 @@ Is this tweet expressing a scoreable OPINION, TAKE, or JUDGMENT about a Printr t
 Reply with ONLY the word "opinion" or "conversation". No punctuation. No explanation."""
 
 
-def classify_tweet_intent(tweet_text: str, author_handle: str) -> str:
-    """Returns 'opinion' or 'conversation'. Used to route: opinion→score card, conversation→regular reply."""
-    user_message = f'Tweet from @{author_handle}:\n"{tweet_text}"'
+def classify_tweet_intent(
+    tweet_text: str,
+    author_handle: str,
+    thread_context: list[dict] | None = None,
+) -> str:
+    """Returns 'opinion' or 'conversation'. Uses thread context for accurate classification."""
+    user_message = ""
+    if thread_context and len(thread_context) > 1:
+        user_message += _thread_context_str(thread_context[:-1]) + "\n"
+    user_message += f'Tweet from @{author_handle}:\n"{tweet_text}"'
     result = _call_claude(CLASSIFY_INTENT_PROMPT, user_message, max_tokens=5)
     return "opinion" if "opinion" in result.lower() else "conversation"
 
