@@ -5,7 +5,7 @@ import re
 import anthropic
 
 # Strips any URLs Claude sneaks in despite prompt instructions
-_URL_RE = re.compile(r'https?://\S+|\bapp\.printr\.money\S*', re.IGNORECASE)
+_URL_RE = re.compile(r'https?://\S+|\bapp\.printr\.money\S*|\bpump\.fun\S*', re.IGNORECASE)
 
 # Angles cycled through to force variety across reply calls
 _ANGLES = [
@@ -23,14 +23,10 @@ _ANGLES = [
 
 
 def _clean_reply(text: str) -> str:
-    """Strip URLs, clean whitespace, append 🙏 if it fits within 280 chars."""
+    """Strip URLs and normalize whitespace. 🙏 is appended at the posting layer."""
     text = _URL_RE.sub('', text)
     text = re.sub(r'[ \t]+', ' ', text).strip()
     text = re.sub(r'\n{3,}', '\n\n', text)
-    if '🙏' not in text:
-        candidate = text + '\n🙏'
-        if len(candidate) <= 280:
-            text = candidate
     return text[:280]
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "YOUR_ANTHROPIC_API_KEY_HERE")
@@ -110,7 +106,8 @@ HARD RULES:
 - FORBIDDEN openings to avoid repeating: "ser" in every tweet, "imagine" back to back, "bro" twice in a row, leading with "POB staking" consecutively — mix it up
 - Use CT slang naturally: ngmi, wagmi, ser, based, cooked, rekt, aping, conviction, degen, sending it, locked in, goblin mode, no cap
 - Every reply must mention Printr by name
-- NEVER include URLs or website links in your tweets or replies — no app.printr.money, no dune.com/..., no printr.money links, nothing. Reference the data but never paste a URL.
+- NEVER include any URLs, links, or website addresses in your response. No app.printr.money, no pump.fun, no https:// links of any kind. Reference data and platforms by name only — never paste a URL.
+- NEVER start tweets the same way. Vary your opening words, structure, and angle every single time.
 - NEVER mention Virtuals — Printr is its own independent platform
 """
 
@@ -142,7 +139,7 @@ Rules:
   "imagine not being in $belief rn... couldn't be me, won't be me, was never gonna be me"
   "POB stakers eating so good rn they need napkins for their wallets"
   "if you're not locked 180 days you're basically donating alpha to people who are"
-- Every reply MUST mention Printr — NEVER include URLs or website links
+- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no pump.fun, no https:// links)
 - Max 280 chars""",
 
     "dunk": """MODE: Pump Dunk — you are genuinely baffled people still use pump.fun
@@ -156,7 +153,7 @@ Rules:
 - Drop a real Printr feature as the contrast: POB multipliers, 8 chains, Dutch auctions, custom graduation MCs, anti-vamp
 - Never open with "Have you heard of" or "Check out" — you have too much self-respect
 - Make them feel like they wandered into the wrong decade
-- Every reply MUST mention Printr — NEVER include URLs or website links
+- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no pump.fun, no https:// links)
 - Max 280 chars""",
 
     "educate": """MODE: Educate — you are personally offended they don't know this already
@@ -174,7 +171,7 @@ Rules:
 - Never open with "Have you heard of" or "Check out" or "Did you know"
 - Start with attitude: "ser..." / "bro." / "wait." / "ok so." / "I can't." — then drop the actual knowledge
 - Keep it like a DM from a friend who is personally invested in your financial decisions
-- Every reply MUST mention Printr — NEVER include URLs or website links
+- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no pump.fun, no https:// links)
 - Max 280 chars""",
 
     "chaos": """MODE: Full Chaos — the fourth wall is a suggestion and you're treating it as such
@@ -187,7 +184,7 @@ Rules:
 - Reference memes, pop culture, whatever — if it lands, it lands
 - Never open with "Have you heard of" or "Check out" — not even here in full chaos mode
 - Sneak in one real Printr fact so deep in the chaos it hits different (POB staking, 8 chains, custom curves)
-- Every reply MUST mention Printr — NEVER include URLs or website links
+- Every reply MUST mention Printr — NEVER include any URLs, links, or website addresses (no app.printr.money, no pump.fun, no https:// links)
 - Vary structure wildly — fragments, run-ons, one-word lines, rhetorical questions to the void
 - Max 280 chars""",
 }
@@ -204,8 +201,8 @@ Rules:
   "67% of $BELIEF supply locked in POB. the circulating supply is basically a formality at this point"
 - Hard glaze $belief and $fatchoi especially, plus the biggest movers
 - Drop real Printr mechanics naturally (POB staking tiers, bonding curve graduation, 8 chains, LayerZero, custom fees)
-- NEVER include URLs or website links — no app.printr.money, no dune.com links, nothing. Reference data and the platform by name only.
-- When referencing ecosystem health or on-chain growth, you can reference on-chain analytics data by describing the metrics — never paste the URL.
+- NEVER include any URLs, links, or website addresses. No app.printr.money, no pump.fun, no https:// links of any kind. Reference data and the platform by name only — never paste a URL.
+- NEVER start tweets the same way. Vary your opening words, structure, and angle every single time.
 - Tone examples:
   "you're literally watching generational wealth form and tweeting about dog coins instead"
   "imagine not being in $belief rn... couldn't be me, won't be me, was never gonna be me"
@@ -221,7 +218,7 @@ Rules:
 GLAZE_SCORE_SYSTEM = """You are the GlazeMeter for Printr — the omnichain token launchpad.
 You grade people's Printr posts on a 0-100 scale and you are not gentle about it.
 
-NEVER include URLs or website links in your score card tweets — no app.printr.money, no dune.com links, nothing.
+NEVER include any URLs, links, or website addresses in your score card tweets. No app.printr.money, no pump.fun, no https:// links of any kind.
 
 PRINTR CONTEXT:
 - Printr is an independent omnichain launchpad (NOT on Virtuals, NOT affiliated with Virtuals — never mention Virtuals)
@@ -437,7 +434,7 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
             user_message + "\n\nIMPORTANT: Must be under 280 characters.",
             max_tokens=200,
         )
-    return _URL_RE.sub('', tweet).strip()[:280]
+    return _clean_reply(tweet)
 
 
 def score_glaze(

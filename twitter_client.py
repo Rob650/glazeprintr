@@ -1,4 +1,5 @@
 import os
+import re
 import tweepy
 import logging
 from datetime import datetime, timezone, timedelta
@@ -14,6 +15,8 @@ os.environ.setdefault("X_ACCESS_TOKEN", "997357889927888898-K4DUwj3Wgpu1IoP8F3GA
 os.environ.setdefault("X_ACCESS_TOKEN_SECRET", "MS4UTY7G9S8QW7KgLTdELDAfZabGBR7dZxxs9ecppZCP8")
 os.environ.setdefault("X_CLIENT_ID", "RzVrN2tVbmtaYnBvV3J5TzZvUmY6MTpjaQ")
 os.environ.setdefault("X_CLIENT_SECRET", "63hVNoMiHwRNbbI8-uwIJikLSX138Nuo_iptr1Ix9mAzGD4kXd")
+
+_URL_RE = re.compile(r'https?://\S+|\bapp\.printr\.money\S*|\bpump\.fun\S*', re.IGNORECASE)
 
 BOT_HANDLE = os.environ.get("BOT_HANDLE", "printrglazr")
 SKIP_HANDLES = {BOT_HANDLE.lower(), "printr_money"}
@@ -141,20 +144,27 @@ def fetch_mentions(since_id: str | None = None) -> list[dict]:
         return []
 
 
-def _append_prayer(text: str) -> str:
-    return text if text.rstrip().endswith("🙏") else text.rstrip() + "\n\n🙏"
+def _clean_tweet(text: str) -> str:
+    """Strip URLs, normalize whitespace, ensure ends with \\n\\n🙏, truncate to 280 chars."""
+    text = _URL_RE.sub('', text)
+    text = re.sub(r'[ \t]+', ' ', text).strip()
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    if not text.rstrip().endswith('🙏'):
+        text = text.rstrip() + '\n\n🙏'
+    return text[:280]
 
 
 def post_reply(reply_text: str, in_reply_to_tweet_id: str, media_path: str | None = None) -> str | None:
     client = get_v2_client()
+    clean = _clean_tweet(reply_text)
     try:
         response = client.create_tweet(
-            text=_append_prayer(reply_text),
+            text=clean,
             in_reply_to_tweet_id=in_reply_to_tweet_id,
             **_media_kwargs(media_path),
         )
         tweet_id = response.data["id"]
-        logger.info(f"Posted reply {tweet_id} (media={'yes' if media_path else 'no'}): {reply_text[:60]}...")
+        logger.info(f"Posted reply {tweet_id} (media={'yes' if media_path else 'no'}): {clean[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
         logger.error(f"Failed to post reply: {e}")
@@ -163,10 +173,11 @@ def post_reply(reply_text: str, in_reply_to_tweet_id: str, media_path: str | Non
 
 def post_tweet(text: str, media_path: str | None = None) -> str | None:
     client = get_v2_client()
+    clean = _clean_tweet(text)
     try:
-        response = client.create_tweet(text=_append_prayer(text), **_media_kwargs(media_path))
+        response = client.create_tweet(text=clean, **_media_kwargs(media_path))
         tweet_id = response.data["id"]
-        logger.info(f"Posted original tweet {tweet_id} (media={'yes' if media_path else 'no'}): {text[:60]}...")
+        logger.info(f"Posted original tweet {tweet_id} (media={'yes' if media_path else 'no'}): {clean[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
         logger.error(f"Failed to post tweet: {e}")
@@ -175,10 +186,11 @@ def post_tweet(text: str, media_path: str | None = None) -> str | None:
 
 def post_quote_tweet(text: str, quote_tweet_id: str, media_path: str | None = None) -> str | None:
     client = get_v2_client()
+    clean = _clean_tweet(text)
     try:
-        response = client.create_tweet(text=_append_prayer(text), quote_tweet_id=quote_tweet_id, **_media_kwargs(media_path))
+        response = client.create_tweet(text=clean, quote_tweet_id=quote_tweet_id, **_media_kwargs(media_path))
         tweet_id = response.data["id"]
-        logger.info(f"Posted quote tweet {tweet_id} (media={'yes' if media_path else 'no'}): {text[:60]}...")
+        logger.info(f"Posted quote tweet {tweet_id} (media={'yes' if media_path else 'no'}): {clean[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
         logger.error(f"Failed to post quote tweet: {e}")
