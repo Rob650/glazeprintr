@@ -192,6 +192,20 @@ def count_replies_today() -> int:
         return row[0] if row else 0
 
 
+def reset_daily_reply_counter() -> int:
+    """Shift today's replied_tweets timestamps to yesterday so the daily cap resets.
+    Keeps tweet_ids in DB so the bot won't re-reply to the same tweets."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with db() as conn:
+        result = conn.execute(
+            """UPDATE replied_tweets
+               SET created_at = datetime(created_at, '-1 day')
+               WHERE created_at LIKE ?""",
+            (f"{today}%",)
+        )
+        return result.rowcount
+
+
 def count_replies_to_account_last_hour(author_id: str) -> int:
     with db() as conn:
         row = conn.execute(

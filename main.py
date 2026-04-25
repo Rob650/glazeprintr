@@ -221,6 +221,13 @@ async def api_restart_stream():
     return {"status": "restarting"}
 
 
+@app.post("/api/reset-counter")
+async def api_reset_counter():
+    shifted = database.reset_daily_reply_counter()
+    logger.info("Daily reply counter reset via API, shifted %d rows", shifted)
+    return {"status": "reset", "rows_shifted": shifted, "replies_today": database.count_replies_today()}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "glazeprintr", "dry_run": DRY_RUN}
