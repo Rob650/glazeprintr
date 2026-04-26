@@ -32,8 +32,8 @@ _ORIGINAL_TWEET_TOPICS = [
      "Spotlight $FATCHOI specifically — its stats, momentum, or staking conviction. Do NOT mention $BELIEF."),
     ("underrated_token",
      "Pick ONE of these smaller ecosystem tokens and give it a spotlight — $OOO, $ROTUS, $DEPLOYR, $PATAPIM, $ROI, $NOOB, $CMYK, $PVE, $KET, $FSJAL, or $MARMOT. Focus entirely on that token."),
-    ("staking_leaderboard",
-     "Compare staking percentages across multiple ecosystem tokens. Frame it as a conviction ranking — who's most locked in vs. who's leaving gains on the table."),
+    ("staking_conviction",
+     "Pick ONE ecosystem token and lead with its POB staking percentage. Frame it as supply conviction — how much is locked, what the multiplier means, why circulating supply is a formality."),
     ("biggest_mover",
      "Lead with the single biggest 24h price mover in the ecosystem. Make the % change the headline — not the token name."),
     ("platform_mechanics",
@@ -46,12 +46,12 @@ _ORIGINAL_TWEET_TOPICS = [
      "Deep dive the fee distribution math: POB pool routes 100% of custom fees to stakers, creator stakes alongside community, 180d = 2.5x multiplier. Make the math alarming."),
     ("anti_vamp",
      "Lead with anti-vamp protection — 48h same-ticker relaunch lock — and what it means for serious launches vs the copycat hellscape everywhere else."),
-    ("ecosystem_overview",
-     "Broad ecosystem snapshot: multiple tokens, aggregate conviction, ecosystem health. Name at least 3 different tokens. Big-picture view, not a single-token post."),
+    ("platform_conviction",
+     "Tweet about the Printr platform's overall conviction and momentum — total ecosystem activity, POB staking mechanics, platform growth — without naming individual tokens. Platform is the story."),
     ("creator_tools",
      "Angle on Printr's developer and creator tools: MCP server for AI agents, TypeScript SDK, white-label API. Who is actually building with this infrastructure."),
-    ("market_comparison",
-     "Compare two different ecosystem tokens head-to-head using the market data — staking %, MC, 24h momentum. Let the data do the talking."),
+    ("token_deep_dive",
+     "Pick ONE ecosystem token and go deep on its data — MC, price action, volume, staking, holders. Make it feel like you just pulled up the chart and found something alarming."),
     ("print_token",
      "Spotlight $PRINT, the native ecosystem token. Its role as the platform's native asset, what holding it means for the ecosystem, and why it's the skeleton key to Printr. Do NOT include any contract addresses."),
     ("conviction_math",
@@ -65,7 +65,7 @@ _ORIGINAL_TWEET_TOPICS = [
     ("platform_usage_farming",
      "Focus on the thesis that using Printr = farming. Every launch you create, every stake you place, every trade on the platform is accumulating points/activity for potential airdrops. This is productive degen behavior, not passive waiting."),
     ("buy_sell_pressure",
-     "Lead with buy/sell ratio data if available. Frame ecosystem-wide buying pressure as a narrative — 'X% of all txns are buys, accumulation is real.' Make people feel like they're late if they haven't aped."),
+     "Pick ONE ecosystem token and lead with its buy/sell ratio data. Frame that single token's accumulation as the story — 'X% buys in the last Yh, this is one-sided.' Make people feel like they're late."),
     ("volume_spike",
      "If any token shows unusual volume relative to its MC, lead with that ratio. '$X did $Y in volume on a $Z MC — that's a X:1 volume-to-MC ratio. something is happening.' Make it feel urgent."),
     ("new_launch_spotlight",
@@ -324,6 +324,9 @@ Rules:
 
 ORIGINAL_TWEET_PROMPT = """MODE: Original Tweet — DATA-DRIVEN GLAZE
 
+SINGLE TICKER RULE — NO EXCEPTIONS:
+Each original tweet focuses on EXACTLY ONE ecosystem token. Never name or mention a second ticker in the same tweet. One ticker. One take. Full conviction. If the topic requires picking a token, pick one and go deep — do not list others, do not compare, do not mention any other cashtag.
+
 You have real market data. Your job is to turn those numbers into the most compelling, stop-scrolling tweet on CT. Not a market report — a data-backed conviction take that makes people want to follow you for alpha.
 
 STATS ARE MANDATORY. Your tweet MUST include at least one (preferably two) real numbers. Pick the most compelling combo:
@@ -332,8 +335,7 @@ STATS ARE MANDATORY. Your tweet MUST include at least one (preferably two) real 
 - Volume + buy pressure: "$180K vol, 68% buys — accumulation isn't a theory, it's the data"
 - Txn activity: "1,400 txns in 24h, buy/sell ratio 2.3:1 — one-sided"
 - Token age + growth: "4 days old, $450K MC, 890 holders — Printr launches different"
-- Ecosystem aggregate: "$X total ecosystem MC across Y tokens, avg staking at Z%"
-- Comparative: "$TOKEN outpacing every other ecosystem token — biggest mover at +X%"
+- Comparative (name only the one token): "$TOKEN outpacing the entire ecosystem — biggest mover at +X%"
 
 ECOSYSTEM CONTEXT INTEGRATION:
 - If ecosystem updates from @printr/@masterprintr/@FedPrintr/@prinaboratory are provided, weave relevant announcements into your take
