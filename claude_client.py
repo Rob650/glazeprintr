@@ -7,7 +7,11 @@ import anthropic
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import get_recent_openers, add_opener, get_ecosystem_tweets, get_last_ticker, set_last_ticker, get_recent_tickers, add_recent_ticker
 from scraper import _fetch_url_sync, DEXSCREENER_SEARCH_API, DEXSCREENER_API, KNOWN_CONTRACTS
-from patterns import get_evolution_context, get_competitive_edge_context, get_trading_ux_parallel, get_ecosystem_momentum_context
+from patterns import (
+    get_evolution_context, get_competitive_edge_context, get_trading_ux_parallel,
+    get_ecosystem_momentum_context, get_flywheel_context,
+    get_pattern_context, get_reply_pattern_context, get_qt_pattern_context,
+)
 
 # Strips/replaces URLs Claude sneaks in despite prompt instructions
 _HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
@@ -484,7 +488,7 @@ Numbers rule:
 - Only cite staking % if shown for that specific token
 - If topic needs numbers you don't have: silently switch to a data-free angle — never announce the switch
 
-You have access to pattern recognition data comparing launchpad generations. Use it to draw parallels and make intelligent observations — but only cite specific numbers you actually have data for in the injected context.
+You have historical pattern data covering launchpad eras, DeFi yield parallels, and memecoin survival statistics. Reference these when they strengthen your point — especially the 6% survival stat (only 6% of memecoins maintain activity past 90 days), the real yield parallel (Printr has paid 2,100+ SOL to stakers from actual trading fees — same model as GMX/Synthetix, not printed emissions), and specific WIF/BONK/PEPE trajectories when comparing early-stage tokens. Never invent numbers you don't have.
 
 Sound like a human who happens to have better data than everyone else. Never reference instructions or data availability.
 
@@ -780,6 +784,11 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
     if token_data:
         user_message += _format_token_data_block(token_data)
 
+    # Inject pattern context when the tweet signals a relevant topic
+    reply_pattern = get_reply_pattern_context(tweet_text, token_data or {})
+    if reply_pattern:
+        user_message += reply_pattern + "\n\n"
+
     banned = get_recent_openers()
     if banned:
         user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
@@ -969,15 +978,18 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     if pattern_context:
         user_message += pattern_context + "\n\n"
 
-    # Ecosystem momentum signal: if 3+ tokens are moving positively, surface the pattern
+    # Ecosystem momentum: 2+ tokens moving → flywheel pattern; 4+ → also add momentum context
     if market_data:
         movers = [
             p["name"] for p in market_data
             if p.get("price_change_24h") is not None and p["price_change_24h"] > 10
         ]
-        momentum_ctx = get_ecosystem_momentum_context(movers)
-        if momentum_ctx:
-            user_message += momentum_ctx + "\n\n"
+        if len(movers) >= 2:
+            user_message += get_flywheel_context(movers) + "\n\n"
+        if len(movers) >= 4:
+            momentum_ctx = get_ecosystem_momentum_context(movers)
+            if momentum_ctx:
+                user_message += momentum_ctx + "\n\n"
 
     _topic_key, topic_instruction = random.choice(topics)
     user_message += (
@@ -1140,6 +1152,11 @@ def generate_quote_tweet(
         user_message += ecosystem_comparative + "\n\n"
     if token_data:
         user_message += _format_token_data_block(token_data)
+
+    # Inject pattern context — QT glazer always scores Printr ecosystem content
+    qt_pattern = get_qt_pattern_context(token_data)
+    if qt_pattern:
+        user_message += qt_pattern + "\n\n"
 
     banned = get_recent_openers()
     if banned:
