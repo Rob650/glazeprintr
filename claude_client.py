@@ -3,7 +3,7 @@ import json
 import random
 import re
 import anthropic
-from database import get_recent_openers, add_opener, get_ecosystem_tweets
+from database import get_recent_openers, add_opener, get_ecosystem_tweets, get_last_ticker, set_last_ticker
 
 # Strips/replaces URLs Claude sneaks in despite prompt instructions
 _HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
@@ -817,12 +817,19 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
 
     # Enforce exact tweet distribution via weighted random bucket selection:
     # 20% $FATCHOI glaze | 30% other-ticker glaze | 25% Dune/competitors | 25% platform topics
+    # Never pick the same ticker back-to-back.
+    last_ticker = get_last_ticker()
     roll = random.random()
-    if roll < 0.20:
+    chosen_ticker = None
+
+    if roll < 0.20 and last_ticker != "fatchoi":
         topics = _FATCHOI_TOPICS
         ticker_note = "SINGLE TICKER RULE: this tweet is about $FATCHOI only — no other cashtags.\n\n"
+        chosen_ticker = "fatchoi"
     elif roll < 0.50:
-        ticker = random.choice(_OTHER_TICKERS)
+        # Also catches the FATCHOI redirect (roll < 0.20 but fatchoi was last used)
+        available = [t for t in _OTHER_TICKERS if t != last_ticker]
+        ticker = random.choice(available or _OTHER_TICKERS)
         meme_angles = (
             "grindset, price shock, holder psychology, community callout, "
             "philosophical conviction, absurdist humor, or pure price action"
@@ -833,6 +840,7 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
             f"Lead with its best live stat if available. Focus entirely on ${ticker.upper()}.",
         )]
         ticker_note = f"SINGLE TICKER RULE: this tweet is about ${ticker.upper()} only — no other cashtags.\n\n"
+        chosen_ticker = ticker
     elif roll < 0.75:
         topics = _DUNE_COMPETITOR_TOPICS
         ticker_note = ""
@@ -863,6 +871,7 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     opener = _extract_opener(tweet)
     if opener:
         add_opener(opener)
+    set_last_ticker(chosen_ticker)
     return tweet
 
 
