@@ -61,24 +61,23 @@ _CONTRACT_RE = re.compile(
     r'\b(0x[0-9a-fA-F]{40,}|[1-9A-HJ-NP-Za-km-z]{32,44})\b'
 )
 
-# Keywords that make a list tweet worth engaging with.
-# Tweets missing all of these AND any cashtag are skipped silently.
-_LIST_RELEVANCE_KEYWORDS = frozenset([
-    "printr", "pumpfun", "pump.fun", "pump fun",
-    "staking", "pob", "proof of belief", "bonding",
-    "crypto", "defi", "blockchain", "solana", "ethereum", "bitcoin",
-    "token", "nft", "liquidity", "launchpad", "layerzero", "omnichain",
-    "ngmi", "wagmi", "degen", "aping", "rekt", "fud", "shill",
-    "gem", "rug", "mcap", "altcoin", "memecoin",
-])
+# Core keywords — tweets matching any of these (or any cashtag, or any top-10 ticker) are engaged.
+_LIST_RELEVANCE_KEYWORDS = frozenset(["printr", "pob", "brrr", "belief"])
+
+
+def _get_top_tickers(n: int = 10) -> list[str]:
+    """Return the top N ticker names (lowercase) from the most recent Printr scrape."""
+    return [p["name"].lower() for p in _latest_projects[:n]]
 
 
 def _is_relevant_tweet(text: str) -> bool:
-    """Returns True if the tweet is crypto/Printr-related and worth engaging with."""
+    """Returns True if the tweet mentions a cashtag, a core keyword, or a current top-10 token."""
     if re.search(r'\$[a-zA-Z]{2,}', text):
         return True
     lower = text.lower()
-    return any(kw in lower for kw in _LIST_RELEVANCE_KEYWORDS)
+    if any(kw in lower for kw in _LIST_RELEVANCE_KEYWORDS):
+        return True
+    return any(ticker in lower for ticker in _get_top_tickers(10))
 
 
 def _extract_token(text: str, extra: str = "") -> str:
@@ -451,6 +450,22 @@ def refresh_ecosystem_context():
     logger.info(f"Ecosystem context refreshed — stored {total_stored} tweets total")
 
 
+async def refresh_top_tickers():
+    """Fetch current top tokens by market cap from Printr and cache for keyword scanning."""
+    global _latest_projects
+    logger.info("Refreshing top tickers from Printr marketplace...")
+    try:
+        projects = await scrape_all_data()
+        if projects:
+            _latest_projects = projects
+            top = _get_top_tickers(10)
+            logger.info(f"Top tickers updated: {', '.join(f'${t.upper()}' for t in top)}")
+        else:
+            logger.warning("refresh_top_tickers: scrape returned empty — keeping previous cache")
+    except Exception as e:
+        logger.error(f"refresh_top_tickers error: {e}")
+
+
 async def post_original_tweet():
     global _latest_projects
     if is_paused():
@@ -476,7 +491,8 @@ async def post_original_tweet():
                 )
 
         memory_context = mem.get_memory_context()
-        tweet_text = generate_original_tweet(market_data=projects, memory_context=memory_context)
+        top_tickers = _get_top_tickers(10)
+        tweet_text = generate_original_tweet(market_data=projects, memory_context=memory_context, top_tickers=top_tickers)
 
         img_path = None  # image generation disabled
 

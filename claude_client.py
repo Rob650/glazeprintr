@@ -567,7 +567,7 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
     return reply, mode
 
 
-def generate_original_tweet(market_data: list[dict] = None, memory_context: str = "") -> str:
+def generate_original_tweet(market_data: list[dict] = None, memory_context: str = "", top_tickers: list[str] = None) -> str:
     system = SYSTEM_PROMPT_BASE + "\n\n" + ORIGINAL_TWEET_PROMPT
 
     ecosystem_ctx = get_ecosystem_context_for_prompt()
@@ -578,12 +578,16 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     if memory_context:
         user_message += f"MEMORY CONTEXT:\n{memory_context}\n\n"
 
+    if top_tickers:
+        tickers_fmt = ", ".join(f"${t.upper()}" for t in top_tickers)
+        user_message += f"CURRENT TOP 10 TOKENS BY MARKET CAP (rotate through these — glaze them): {tickers_fmt}\n\n"
+
     if market_data:
         top_mc = sorted(
             [p for p in market_data if p.get("market_cap")],
             key=lambda p: p["market_cap"],
             reverse=True,
-        )[:5]
+        )[:10]
         top_movers = sorted(
             [p for p in market_data if p.get("price_change_24h") is not None],
             key=lambda p: abs(p["price_change_24h"]),
@@ -626,7 +630,22 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     if banned:
         user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
 
-    _topic_key, topic_instruction = random.choice(_ORIGINAL_TWEET_TOPICS)
+    # Build topic list — replace hardcoded token topics with dynamic versions when we have live top tickers
+    topics = list(_ORIGINAL_TWEET_TOPICS)
+    if top_tickers and len(top_tickers) >= 2:
+        smaller = [f"${t.upper()}" for t in top_tickers[1:]]
+        second_token = top_tickers[1].upper()
+        topics = [(k, v) for k, v in topics if k not in ("underrated_token", "fatchoi_spotlight")]
+        topics.append((
+            "underrated_token",
+            f"Pick ONE of the current top Printr tokens and give it a full spotlight — {', '.join(smaller)}. Focus entirely on that one token.",
+        ))
+        topics.append((
+            "second_token_spotlight",
+            f"Spotlight ${second_token} specifically — its stats, momentum, or staking conviction. Do NOT mention $BELIEF.",
+        ))
+
+    _topic_key, topic_instruction = random.choice(topics)
     user_message += (
         f"TOPIC FOCUS FOR THIS TWEET: {topic_instruction}\n"
         "Do NOT default to $BELIEF unless the topic explicitly requires it.\n\n"

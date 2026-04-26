@@ -30,12 +30,14 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(bot.poll_mentions, "interval", minutes=5, id="mentions_poller", replace_existing=True)
     scheduler.add_job(bot.post_original_tweet, "interval", minutes=10, id="original_tweeter", replace_existing=True)
     scheduler.add_job(bot.refresh_ecosystem_context, "interval", hours=6, id="ecosystem_refresher", replace_existing=True)
+    scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True)
     scheduler.start()
-    logger.info("Schedulers started: list poller (5 min), mentions poller (5 min), original tweets (10 min), ecosystem refresh (6h)")
+    logger.info("Schedulers started: list poller (5 min), mentions poller (5 min), original tweets (10 min), ecosystem refresh (6h), ticker refresh (6h)")
 
-    # Seed ecosystem context on startup without blocking the event loop
+    # Seed ecosystem context and top tickers on startup
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, bot.refresh_ecosystem_context)
+    asyncio.create_task(bot.refresh_top_tickers())
 
     yield
 
