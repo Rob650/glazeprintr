@@ -42,10 +42,11 @@ async def lifespan(app: FastAPI):
     # scheduler.add_job(bot.poll_follower_tweets, "interval", minutes=5, id="follower_poller", replace_existing=True,
     #                   max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.post_original_tweet, "interval", minutes=10, id="original_tweeter", replace_existing=True)
+    scheduler.add_job(bot.post_coin_review_tweet, "interval", minutes=15, id="coin_reviewer", replace_existing=True)
     scheduler.add_job(bot.refresh_ecosystem_context, "interval", hours=6, id="ecosystem_refresher", replace_existing=True)
     scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True)
     scheduler.start()
-    logger.info("Schedulers started: mentions poller (5 min), QT glazer (10 min), original tweets (10 min), ecosystem refresh (6h), ticker refresh (6h) — list poller DISABLED, follower scan DISABLED")
+    logger.info("Schedulers started: mentions poller (5 min), QT glazer (10 min), original tweets (10 min), coin reviews (15 min), ecosystem refresh (6h), ticker refresh (6h) — list poller DISABLED, follower scan DISABLED")
 
     # Seed ecosystem context and top tickers on startup
     loop = asyncio.get_event_loop()
@@ -226,6 +227,13 @@ async def api_trigger_follower_poll():
     logger.info("Manual follower tweet poll trigger via API")
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, bot.poll_follower_tweets)
+    return {"status": "triggered", "dry_run": DRY_RUN}
+
+
+@app.post("/api/trigger-coin-review")
+async def api_trigger_coin_review():
+    logger.info("Manual coin review trigger via API")
+    asyncio.create_task(bot.post_coin_review_tweet())
     return {"status": "triggered", "dry_run": DRY_RUN}
 
 

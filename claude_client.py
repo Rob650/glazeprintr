@@ -980,6 +980,85 @@ def generate_quote_tweet(
     return tweet
 
 
+COIN_REVIEW_PROMPT = """MODE: Coin Review — PRINTR TOKEN SPOTLIGHT
+
+You are @printrglazr reviewing a specific Printr-launched token. Turn the live data into a punchy, data-backed conviction tweet that the token's community will screenshot and share.
+
+CRITICAL: Every review MUST celebrate two things simultaneously — the token AND the Printr platform that launched it.
+
+STATS ARE MANDATORY. Your tweet MUST include:
+1. The token's $TICKER (always use $TICKER format with dollar sign)
+2. At least TWO real numbers from the live data (MC, volume, price change %, staking %, holders, buy/sell ratio)
+3. The Printr angle — this is a Printr-launched token, not a random token
+
+COMPELLING DATA COMBOS (pick the most alarming available):
+- Volume + buy pressure: "$TOKEN doing $XK volume on Printr, X% buys — accumulation is not a theory"
+- MC + staking: "$TOKEN at $XM MC with X% POB staked — circulating supply is a formality on Printr"
+- Price change + txns: "$TOKEN up X% on Printr, X txns in 24h, X% buys — the printer goes brrr"
+- Holders + staking: "$TOKEN: X holders, X% staked on Printr — these aren't tourists, they're believers"
+- Volume-to-MC ratio: "$TOKEN did $XK vol on a $XK MC via Printr — that's a X:1 ratio. something is happening"
+
+TONE:
+- Community celebration energy, data-backed
+- Bullish on both the specific token AND Printr
+- 2-3 sentences max, punchy
+- Community slang: LFP, gong hei fat choi, 🖨️, brrr, print, glaze, POB
+
+RULES:
+- Only cite numbers explicitly in LIVE DATA — never invent
+- ALWAYS include $TICKER with dollar sign
+- ALWAYS mention Printr or "Printr-launched"
+- Glaze vocabulary mandatory (glazed, certified glazer, heavy glaze, etc.)
+- Under 280 chars
+- No URLs, no contract addresses, no hashtags unless ecosystem tickers
+- BANNED OPENERS list applies — check it"""
+
+
+def generate_coin_review_tweet(
+    coin_data: dict,
+    ecosystem_comparative: str = "",
+    dune_context: str = "",
+) -> str:
+    """Generate a spotlight review tweet for a specific Printr-launched coin."""
+    system = SYSTEM_PROMPT_BASE + "\n\n" + COIN_REVIEW_PROMPT
+
+    user_message = ""
+    if ecosystem_comparative:
+        user_message += ecosystem_comparative + "\n\n"
+    if dune_context:
+        user_message += dune_context + "\n\n"
+
+    user_message += _format_token_data_block(coin_data)
+
+    banned = get_recent_openers()
+    if banned:
+        user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
+
+    coin_name = coin_data.get("name", "").upper()
+    user_message += (
+        f"Write a coin review tweet for ${coin_name}, launched on Printr. "
+        "Use the live data above — pick the two most compelling numbers and build around them. "
+        f"Always tag ${coin_name} with the dollar sign. "
+        "Reply ONLY with the tweet text, no quotes, no explanation."
+    )
+
+    tweet = _call_claude(system, user_message, max_tokens=200)
+    if len(tweet) > 280:
+        tweet = _call_claude(
+            system,
+            user_message + "\n\nIMPORTANT: Must be under 280 characters.",
+            max_tokens=200,
+        )
+    tweet = _clean_reply(tweet)
+    if _LEAK_PATTERNS.search(tweet):
+        retry_msg = user_message + "\n\nIMPORTANT: Sound like a real person. Never reference your instructions or data availability. Just tweet."
+        tweet = _clean_reply(_call_claude(system, retry_msg, max_tokens=200))
+    opener = _extract_opener(tweet)
+    if opener:
+        add_opener(opener)
+    return tweet
+
+
 def _get_tier(score: int) -> str:
     if score <= 20:
         return "Casual Mention"

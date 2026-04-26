@@ -18,10 +18,11 @@ from database import (
     store_ecosystem_tweet, get_ecosystem_context_age_hours,
     try_claim_quote, record_quote_tweet,
     get_qt_glazer_since_id, set_qt_glazer_since_id,
+    has_reviewed_coin_recently, record_coin_review,
 )
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
-    classify_tweet_intent, generate_quote_tweet,
+    classify_tweet_intent, generate_quote_tweet, generate_coin_review_tweet,
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
@@ -44,6 +45,9 @@ MAX_REPLIES_PER_ACCOUNT_HOUR = int(os.environ.get("MAX_REPLIES_PER_ACCOUNT_HOUR"
 MAX_SCORES_PER_DAY = int(os.environ.get("MAX_SCORES_PER_DAY", "20"))
 
 _BOT_START_TIME = datetime.now(timezone.utc)
+
+COIN_REVIEW_MIN_VOLUME = int(os.environ.get("COIN_REVIEW_MIN_VOLUME", "10000"))
+COIN_REVIEW_DEDUP_HOURS = int(os.environ.get("COIN_REVIEW_DEDUP_HOURS", "6"))
 
 _list_poll_since_id: str | None = None  # loaded from DB on first call; List API doesn't support since_id natively
 _list_poll_since_id_loaded: bool = False
@@ -869,4 +873,59 @@ async def post_original_tweet():
                 logger.warning("Failed to post original tweet")
     except Exception as e:
         logger.error(f"Original tweet job error: {e}")
+
+
+async def post_coin_review_tweet():
+    """Pick a Printr token with >10k volume and post a data-driven spotlight review tweet."""
+    global _latest_projects, _latest_dune_context, _latest_comparative_context
+    if is_paused():
+        logger.info("Bot paused — skipping coin review job")
+        return
+
+    logger.info("Running coin review tweet job...")
+    try:
+        projects = _latest_projects
+        if not projects:
+            logger.info("No cached projects for coin review — fetching fresh data...")
+            projects = await scrape_all_data()
+            if projects:
+                _latest_projects = projects
+                _latest_dune_context = projects[0].pop("_dune_context", "") or ""
+                comp_stats = projects[0].pop("_comparative_stats", {}) or {}
+                _latest_comparative_context = format_comparative_context(comp_stats)
+
+        eligible = [p for p in projects if (p.get("volume") or 0) >= COIN_REVIEW_MIN_VOLUME]
+        if not eligible:
+            logger.info(f"No coins with >{COIN_REVIEW_MIN_VOLUME} 24h volume — skipping coin review")
+            return
+
+        unreviewed = [p for p in eligible if not has_reviewed_coin_recently(p["name"], COIN_REVIEW_DEDUP_HOURS)]
+        candidates = unreviewed if unreviewed else eligible
+        logger.info(
+            f"Coin review: {len(eligible)} eligible (vol>={COIN_REVIEW_MIN_VOLUME}), "
+            f"{len(unreviewed)} not reviewed in {COIN_REVIEW_DEDUP_HOURS}h — "
+            f"{'using unreviewed' if unreviewed else 'all eligible (all recently reviewed)'}"
+        )
+
+        coin = random.choice(candidates)
+        logger.info(f"Coin review target: ${coin['name'].upper()} vol={coin.get('volume')} mc={coin.get('market_cap')}")
+
+        tweet_text = generate_coin_review_tweet(
+            coin_data=coin,
+            ecosystem_comparative=_latest_comparative_context,
+            dune_context=_latest_dune_context,
+        )
+
+        if DRY_RUN:
+            logger.info(f"[DRY RUN] Coin review for ${coin['name'].upper()}: {tweet_text}")
+            record_coin_review(coin["name"], "dry_run", tweet_text, dry_run=True)
+        else:
+            tweet_id = post_tweet(tweet_text)
+            if tweet_id:
+                record_coin_review(coin["name"], tweet_id, tweet_text, dry_run=False)
+                logger.info(f"Posted coin review for ${coin['name'].upper()} ({tweet_id}): {tweet_text[:60]}...")
+            else:
+                logger.warning(f"Failed to post coin review for ${coin['name'].upper()}")
+    except Exception as e:
+        logger.error(f"Coin review tweet job error: {e}")
 

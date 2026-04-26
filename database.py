@@ -152,6 +152,15 @@ def init_db():
                 dry_run INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS coin_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                coin_name TEXT,
+                tweet_id TEXT,
+                tweet_text TEXT,
+                dry_run INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
         """)
 
 
@@ -575,6 +584,25 @@ def get_ecosystem_tweets(limit: int = 40) -> list[dict]:
             (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def has_reviewed_coin_recently(coin_name: str, hours: int = 6) -> bool:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT 1 FROM coin_reviews
+               WHERE coin_name = ? AND created_at >= datetime('now', ?)""",
+            (coin_name.lower(), f"-{hours} hours")
+        ).fetchone()
+        return row is not None
+
+
+def record_coin_review(coin_name: str, tweet_id: str, tweet_text: str, dry_run: bool):
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO coin_reviews (coin_name, tweet_id, tweet_text, dry_run)
+               VALUES (?, ?, ?, ?)""",
+            (coin_name.lower(), tweet_id, tweet_text[:500], int(dry_run))
+        )
 
 
 def get_ecosystem_context_age_hours() -> float | None:
