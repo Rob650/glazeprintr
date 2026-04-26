@@ -1,4 +1,5 @@
 import os
+import hmac
 import logging
 import asyncio
 from contextlib import asynccontextmanager
@@ -36,7 +37,7 @@ async def _require_auth(request: Request):
         token = token[7:]
     if not token:
         token = request.query_params.get("token", "")
-    if token != DASHBOARD_TOKEN:
+    if not hmac.compare_digest(token, DASHBOARD_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -67,14 +68,6 @@ async def lifespan(app: FastAPI):
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.start()
     logger.info("Schedulers started: mentions poller (5 min), QT glazer (30 min), original tweets (60 min), ecosystem refresh (6h), ticker refresh (6h) — list poller DISABLED, follower scan DISABLED")
-
-    # Seed ecosystem context and top tickers on startup
-    loop = asyncio.get_running_loop()
-    fut = loop.run_in_executor(None, bot.refresh_ecosystem_context)
-    fut.add_done_callback(
-        lambda f: logger.error("startup refresh_ecosystem_context error: %s", f.exception()) if f.exception() else None
-    )
-    asyncio.create_task(bot.refresh_top_tickers())
 
     yield
 

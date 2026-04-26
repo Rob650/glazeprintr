@@ -1231,4 +1231,3 @@ def _call_claude(system: str, user_message: str, max_tokens: int = 150) -> str:
             raise
         except Exception:
             raise
-    raise last_exc

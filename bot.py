@@ -739,7 +739,6 @@ def poll_qt_glazer_list():
         logger.debug(f"QT skip {tweet_id}: already claimed")
         return
 
-
     token_data = None
     try:
         token_data = _get_tweet_token_data(tweet_text)
