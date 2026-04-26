@@ -10,6 +10,10 @@ DB_PATH = os.environ.get("DB_PATH", "glazeprintr.db")
 def get_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    # WAL mode: concurrent readers don't block on a writer, reducing BUSY errors
+    # when API-trigger threads and the scheduler overlap.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
