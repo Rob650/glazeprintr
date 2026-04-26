@@ -17,6 +17,7 @@ _EVM_CONTRACT_RE = re.compile(r'^0x[0-9a-fA-F]{40,}$')
 _SOLANA_CONTRACT_RE = re.compile(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$')
 
 PRINTR_ENDPOINTS = [
+    "https://app.printr.money/api/getMarketplaceTokens",
     "https://api.printr.money/v1/tokens?sort=marketCap&order=desc&limit=50",
     "https://app.printr.money/api/tokens?sort=market_cap&limit=50",
     "https://app.printr.money/api/v1/tokens?sort=market_cap",
@@ -36,9 +37,17 @@ PRINTR_TOKEN_STAKING_TEMPLATES = [
 ]
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://app.printr.money/",
+    "Origin": "https://app.printr.money",
+    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
 }
 
 # Known contract addresses to always track via DexScreener even if the printr.money API is down.
@@ -104,28 +113,49 @@ async def _fetch_dexscreener(session: aiohttp.ClientSession, contract_address: s
 
 async def _try_printr_api(session: aiohttp.ClientSession) -> list[dict]:
     for endpoint in PRINTR_ENDPOINTS:
-        try:
-            async with session.get(
-                endpoint, timeout=aiohttp.ClientTimeout(total=12)
-            ) as resp:
-                if resp.status == 200 and "json" in resp.headers.get("content-type", ""):
-                    data = await resp.json()
-                    tokens = (
-                        data
-                        if isinstance(data, list)
-                        else (
-                            data.get("tokens")
-                            or data.get("data")
-                            or data.get("results")
-                            or []
+        for attempt in range(2):
+            try:
+                async with session.get(
+                    endpoint, timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    ct = resp.headers.get("content-type", "")
+                    logger.debug(f"printr endpoint {endpoint} → {resp.status} ct={ct!r}")
+                    if resp.status == 200:
+                        body = await resp.read()
+                        if not body:
+                            break
+                        try:
+                            import json as _json_local
+                            data = _json_local.loads(body)
+                        except Exception:
+                            logger.debug(f"printr endpoint {endpoint}: body not JSON (len={len(body)})")
+                            break
+                        tokens = (
+                            data
+                            if isinstance(data, list)
+                            else (
+                                data.get("tokens")
+                                or data.get("data")
+                                or data.get("results")
+                                or data.get("items")
+                                or []
+                            )
                         )
-                    )
-                    if tokens:
-                        logger.info(f"Got {len(tokens)} tokens from {endpoint}")
-                        return tokens
-        except Exception as e:
-            logger.debug(f"printr endpoint {endpoint}: {e}")
-    logger.info("All printr.money endpoints failed — will use known contracts only")
+                        if tokens:
+                            logger.info(f"Got {len(tokens)} tokens from {endpoint}")
+                            return tokens
+                        logger.debug(f"printr endpoint {endpoint}: 200 but no tokens in response")
+                        break
+                    elif resp.status in (401, 403):
+                        logger.debug(f"printr endpoint {endpoint}: {resp.status} — skipping")
+                        break
+            except asyncio.TimeoutError:
+                logger.debug(f"printr endpoint {endpoint} attempt {attempt+1}: timeout")
+            except Exception as e:
+                logger.debug(f"printr endpoint {endpoint} attempt {attempt+1}: {e}")
+            if attempt == 0:
+                await asyncio.sleep(2)
+    logger.warning("All printr.money endpoints failed — will use known contracts only")
     return []
 
 

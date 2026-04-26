@@ -500,20 +500,27 @@ def refresh_ecosystem_context():
     logger.info(f"Ecosystem context refreshed — stored {total_stored} tweets total")
 
 
-async def refresh_top_tickers():
+async def refresh_top_tickers(max_attempts: int = 3):
     """Fetch current top tokens by market cap from Printr and cache for keyword scanning."""
     global _latest_projects
     logger.info("Refreshing top tickers from Printr marketplace...")
-    try:
-        projects = await scrape_all_data()
-        if projects:
-            _latest_projects = projects
-            top = _get_top_tickers(10)
-            logger.info(f"Top tickers updated: {', '.join(f'${t.upper()}' for t in top)}")
-        else:
-            logger.warning("refresh_top_tickers: scrape returned empty — keeping previous cache")
-    except Exception as e:
-        logger.error(f"refresh_top_tickers error: {e}")
+    delays = [30, 60]
+    for attempt in range(max_attempts):
+        try:
+            projects = await scrape_all_data()
+            if projects:
+                _latest_projects = projects
+                top = _get_top_tickers(10)
+                logger.info(f"Top tickers updated: {', '.join(f'${t.upper()}' for t in top)}")
+                return
+            logger.warning(f"refresh_top_tickers: scrape returned empty (attempt {attempt + 1}/{max_attempts})")
+        except Exception as e:
+            logger.error(f"refresh_top_tickers error (attempt {attempt + 1}/{max_attempts}): {e}")
+        if attempt < max_attempts - 1:
+            delay = delays[min(attempt, len(delays) - 1)]
+            logger.info(f"refresh_top_tickers: retrying in {delay}s...")
+            await asyncio.sleep(delay)
+    logger.warning("refresh_top_tickers: all attempts failed — keeping previous cache")
 
 
 async def post_original_tweet():
