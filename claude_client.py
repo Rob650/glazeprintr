@@ -99,6 +99,25 @@ _PLATFORM_TOPICS = [
 ]
 
 
+_MEMES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memes")
+_MEME_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
+def _pick_meme(ticker: str | None) -> str | None:
+    """Return a random meme image path for ticker, or None if no images exist."""
+    if not ticker:
+        return None
+    ticker_dir = os.path.join(_MEMES_DIR, ticker.lower())
+    if not os.path.isdir(ticker_dir):
+        return None
+    candidates = [
+        os.path.join(ticker_dir, f)
+        for f in os.listdir(ticker_dir)
+        if os.path.splitext(f)[1].lower() in _MEME_EXTS
+    ]
+    return random.choice(candidates) if candidates else None
+
+
 def _clean_reply(text: str) -> str:
     """Strip URLs, contract addresses, and normalize whitespace."""
     text = _HTTPS_RE.sub('', text)
@@ -872,7 +891,7 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     if opener:
         add_opener(opener)
     set_last_ticker(chosen_ticker)
-    return tweet
+    return tweet, _pick_meme(chosen_ticker)
 
 
 def score_glaze(
