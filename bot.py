@@ -83,7 +83,7 @@ _QT_GLAZER_FIXED = frozenset([
     "staking", "pob", "noob", "marmot", "ket", "prinaboratory",
 ])
 _QT_GLAZER_KEYWORDS = _QT_GLAZER_FIXED | frozenset(_OTHER_TICKERS)
-_QT_GLAZER_WINDOW_MINUTES = 30  # wider window for 10-min poll interval
+_QT_GLAZER_WINDOW_MINUTES = 30  # matches 30-min poll interval
 
 _qt_glazer_since_id: str | None = None
 _qt_glazer_since_id_loaded: bool = False
@@ -407,7 +407,7 @@ def poll_mentions():
                 age_str = f"{age:.1f}" if age is not None else "no timestamp"
                 logger.info(f"SKIPPING mention {tweet['id']} — too old ({age_str} minutes, max {MAX_MENTION_AGE_MINUTES})")
                 continue
-            _handle_tweet(tweet)
+            process_tweet(tweet)
 
 
 def poll_list():
@@ -678,8 +678,8 @@ def poll_qt_glazer_list():
 
     logger.info(f"QT Glazer: {len(tweets)} new tweet(s) after since_id filter")
 
-    # Phase 1: collect eligible candidates (filter + atomic claim for dedup)
-    candidates: list[dict] = []
+    # Pass 1: filter candidates (no claiming yet)
+    candidates = []
     for tweet in tweets:
         tweet_id = tweet["id"]
         tweet_text = tweet.get("text", "")
@@ -688,54 +688,63 @@ def poll_qt_glazer_list():
         if author_handle in SKIP_HANDLES:
             logger.debug(f"QT skip: @{author_handle} is in SKIP_HANDLES")
             continue
+
         if tweet_text.startswith("RT @"):
             logger.debug(f"QT skip {tweet_id}: retweet")
             continue
+
+
         if not _is_recent_tweet(tweet, _QT_GLAZER_WINDOW_MINUTES):
             age = _tweet_age_minutes(tweet)
             age_str = f"{age:.1f}" if age is not None else "no timestamp"
             logger.info(f"QT skip {tweet_id}: too old ({age_str} min, max {_QT_GLAZER_WINDOW_MINUTES})")
             continue
+
         if not _is_qt_glazer_relevant(tweet_text):
             logger.info(f"QT skip {tweet_id}: not ecosystem-relevant — {tweet_text[:60]}")
             continue
-        if not try_claim_quote(tweet_id):
-            logger.debug(f"QT skip {tweet_id}: already claimed")
-            continue
+
         candidates.append(tweet)
 
-    logger.info(f"QT Glazer: {len(candidates)} candidate(s) after filtering")
     if not candidates:
+        logger.info("QT Glazer: no candidates after filtering")
         return
 
-    # Phase 2: score all candidates with score_glaze() to find the best one
-    scored: list[tuple[int, dict, list | None]] = []
+    # Pass 2: score all candidates, pick the highest-scoring one
+    scored: list[tuple[int, dict]] = []
     for tweet in candidates:
-        thread_context = _get_thread_context(tweet)
+        tweet_id = tweet["id"]
+        tweet_text = tweet.get("text", "")
+        author_handle = tweet.get("author_handle", "unknown").lower().lstrip("@")
         try:
-            result = score_glaze(
-                tweet.get("text", ""),
-                tweet.get("author_handle", "unknown"),
-                thread_context=thread_context,
-            )
-            score = result[0] if result is not None else 0
+            result = score_glaze(tweet_text, author_handle)
+            if result is not None:
+                score, _tier, _card = result
+                scored.append((score, tweet))
+                logger.info(f"QT scored @{author_handle} ({tweet_id}): {score}/100")
+            else:
+                logger.info(f"QT skip {tweet_id}: not Printr-relevant per score_glaze")
         except Exception as e:
-            logger.warning(f"QT scoring error for {tweet['id']}: {e}")
-            score = 0
-            thread_context = None
-        scored.append((score, tweet, thread_context))
+            logger.warning(f"QT score_glaze failed for {tweet_id}: {e}")
+
+    if not scored:
+        logger.info("QT Glazer: no candidates scored as Printr-relevant")
+        return
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    best_score, best_tweet, best_thread_context = scored[0]
-
+    best_score, best_tweet = scored[0]
     tweet_id = best_tweet["id"]
     tweet_text = best_tweet.get("text", "")
     author_handle = best_tweet.get("author_handle", "unknown").lower().lstrip("@")
-    logger.info(
-        f"QT Glazer: winner score={best_score} @{author_handle} ({tweet_id}): {tweet_text[:80]}"
-    )
 
-    # Phase 3: generate and post quote tweet for the winner only
+    logger.info(f"QT Glazer: best candidate @{author_handle} ({tweet_id}) score={best_score} — {tweet_text[:80]}")
+
+    # Atomic dedup claim for the winner only
+    if not try_claim_quote(tweet_id):
+        logger.debug(f"QT skip {tweet_id}: already claimed")
+        return
+
+
     token_data = None
     try:
         token_data = _get_tweet_token_data(tweet_text)
@@ -751,7 +760,6 @@ def poll_qt_glazer_list():
             token_data=token_data,
             ecosystem_comparative=_latest_comparative_context,
             dune_context=_latest_dune_context,
-            thread_context=best_thread_context,
         )
     except Exception as e:
         logger.error(f"QT Claude error for {tweet_id}: {e}")
