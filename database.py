@@ -142,6 +142,7 @@ def init_db():
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('follower_search_since_id', '');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('qt_glazer_since_id', '');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_ticker', '');
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('recent_tickers', '[]');
 
             CREATE TABLE IF NOT EXISTS qt_glazer_quotes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -516,6 +517,34 @@ def get_last_ticker() -> str:
 
 def set_last_ticker(ticker: str):
     set_state("last_ticker", ticker or "")
+
+
+# --- recent tickers cooldown (excludes last N tickers from selection) ---
+
+def get_recent_tickers(limit: int = 4) -> list[str]:
+    val = get_state("recent_tickers")
+    if not val:
+        return []
+    try:
+        tickers = json.loads(val)
+        return tickers[-limit:] if len(tickers) > limit else tickers
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def set_recent_tickers(tickers: list[str]):
+    set_state("recent_tickers", json.dumps(tickers))
+
+
+def add_recent_ticker(ticker: str, keep: int = 4):
+    if not ticker:
+        return
+    tickers = get_recent_tickers(keep)
+    tickers = [t for t in tickers if t != ticker]  # dedupe: move to end instead of duplicating
+    tickers.append(ticker)
+    if len(tickers) > keep:
+        tickers = tickers[-keep:]
+    set_state("recent_tickers", json.dumps(tickers))
 
 
 # --- qt_glazer_quotes (dedup + record for QT Glazer list) ---

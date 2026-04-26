@@ -4,8 +4,8 @@ import random
 import re
 import anthropic
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from database import get_recent_openers, add_opener, get_ecosystem_tweets, get_last_ticker, set_last_ticker
-from scraper import _fetch_url_sync, DEXSCREENER_SEARCH_API
+from database import get_recent_openers, add_opener, get_ecosystem_tweets, get_last_ticker, set_last_ticker, get_recent_tickers, add_recent_ticker
+from scraper import _fetch_url_sync, DEXSCREENER_SEARCH_API, DEXSCREENER_API, KNOWN_CONTRACTS
 
 # Strips/replaces URLs Claude sneaks in despite prompt instructions
 _HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
@@ -47,7 +47,9 @@ _OTHER_TICKERS = ["ooo", "patapim", "rotus", "roi", "cmyk", "print", "pve", "bel
 
 def _fetch_ticker_change(ticker: str) -> tuple[str, float]:
     try:
-        data = _fetch_url_sync(DEXSCREENER_SEARCH_API.format(ticker.upper()), timeout=5)
+        contract = KNOWN_CONTRACTS.get(ticker.lower())
+        url = DEXSCREENER_API.format(contract) if contract else DEXSCREENER_SEARCH_API.format(ticker.upper())
+        data = _fetch_url_sync(url, timeout=5)
         pairs = (data or {}).get("pairs") or []
         if pairs:
             pairs.sort(key=lambda p: float((p.get("liquidity") or {}).get("usd") or 0), reverse=True)
@@ -891,18 +893,18 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
 
     # Enforce exact tweet distribution via weighted random bucket selection:
     # 20% $FATCHOI glaze | 30% other-ticker glaze | 25% Dune/competitors | 25% platform topics
-    # Never pick the same ticker back-to-back.
-    last_ticker = get_last_ticker()
+    # Cooldown: exclude the last 4 tickers used so no single token dominates.
+    recent_tickers = get_recent_tickers()
     roll = random.random()
     chosen_ticker = None
 
-    if roll < 0.20 and last_ticker != "fatchoi":
+    if roll < 0.20 and "fatchoi" not in recent_tickers:
         topics = _FATCHOI_TOPICS
         ticker_note = "SINGLE TICKER RULE: this tweet is about $FATCHOI only — no other cashtags.\n\n"
         chosen_ticker = "fatchoi"
     elif roll < 0.50:
-        # Also catches the FATCHOI redirect (roll < 0.20 but fatchoi was last used)
-        available = [t for t in _OTHER_TICKERS if t != last_ticker]
+        # Also catches the FATCHOI redirect (roll < 0.20 but fatchoi is on cooldown)
+        available = [t for t in _OTHER_TICKERS if t not in recent_tickers]
         ticker = _pick_ticker_by_momentum(available or _OTHER_TICKERS)
         meme_angles = (
             "grindset, price shock, holder psychology, community callout, "
@@ -917,11 +919,13 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
         chosen_ticker = ticker
     elif roll < 0.75:
         topics = _DUNE_COMPETITOR_TOPICS
-        _example = random.choice([t for t in _OTHER_TICKERS if t != "rotus"])
+        _example_pool = [t for t in _OTHER_TICKERS if t not in recent_tickers] or _OTHER_TICKERS
+        _example = random.choice(_example_pool)
         ticker_note = _ECOSYSTEM_GLAZE_NOTE + f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
     else:
         topics = _PLATFORM_TOPICS
-        _example = random.choice([t for t in _OTHER_TICKERS if t != "rotus"])
+        _example_pool = [t for t in _OTHER_TICKERS if t not in recent_tickers] or _OTHER_TICKERS
+        _example = random.choice(_example_pool)
         ticker_note = _ECOSYSTEM_GLAZE_NOTE + f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
 
     _topic_key, topic_instruction = random.choice(topics)
@@ -947,7 +951,8 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     opener = _extract_opener(tweet)
     if opener:
         add_opener(opener)
-    set_last_ticker(chosen_ticker)
+    set_last_ticker(chosen_ticker)  # kept for backward compat
+    add_recent_ticker(chosen_ticker)
     return tweet, _pick_meme(chosen_ticker)
 
 
