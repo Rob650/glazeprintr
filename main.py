@@ -4,7 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -18,8 +18,26 @@ logging.basicConfig(
 logger = logging.getLogger("glazeprintr")
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
+DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
 
 scheduler = AsyncIOScheduler()
+
+_lock_tweet = asyncio.Lock()
+_lock_mentions = asyncio.Lock()
+_lock_follower_poll = asyncio.Lock()
+_lock_qt_glazer = asyncio.Lock()
+
+
+async def _require_auth(request: Request):
+    if not DASHBOARD_TOKEN:
+        raise HTTPException(status_code=503, detail="API endpoints disabled — set DASHBOARD_TOKEN")
+    token = request.headers.get("Authorization", "")
+    if token.startswith("Bearer "):
+        token = token[7:]
+    if not token:
+        token = request.query_params.get("token", "")
+    if token != DASHBOARD_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 @asynccontextmanager
@@ -41,15 +59,21 @@ async def lifespan(app: FastAPI):
     # Follower scan disabled — Twitter blocks unsolicited replies, wastes API credits.
     # scheduler.add_job(bot.poll_follower_tweets, "interval", minutes=5, id="follower_poller", replace_existing=True,
     #                   max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
-    scheduler.add_job(bot.post_original_tweet, "interval", minutes=60, id="original_tweeter", replace_existing=True)
-    scheduler.add_job(bot.refresh_ecosystem_context, "interval", hours=6, id="ecosystem_refresher", replace_existing=True)
-    scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True)
+    scheduler.add_job(bot.post_original_tweet, "interval", minutes=60, id="original_tweeter", replace_existing=True,
+                      max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    scheduler.add_job(bot.refresh_ecosystem_context, "interval", hours=6, id="ecosystem_refresher", replace_existing=True,
+                      max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True,
+                      max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.start()
     logger.info("Schedulers started: mentions poller (5 min), QT glazer (30 min), original tweets (60 min), ecosystem refresh (6h), ticker refresh (6h) — list poller DISABLED, follower scan DISABLED")
 
     # Seed ecosystem context and top tickers on startup
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, bot.refresh_ecosystem_context)
+    loop = asyncio.get_running_loop()
+    fut = loop.run_in_executor(None, bot.refresh_ecosystem_context)
+    fut.add_done_callback(
+        lambda f: logger.error("startup refresh_ecosystem_context error: %s", f.exception()) if f.exception() else None
+    )
     asyncio.create_task(bot.refresh_top_tickers())
 
     yield
@@ -135,6 +159,9 @@ function badgeMode(mode, dry) {
   return b;
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '…' : (s || ''); }
 
 async function loadStats() {
@@ -161,9 +188,9 @@ async function loadStats() {
   const rows = (d.recent_replies || []).map(rep => `
     <tr>
       <td class="ts">${rep.created_at ? rep.created_at.replace('T', ' ').slice(0, 16) : ''}</td>
-      <td>@${rep.author_handle || ''}</td>
-      <td>${truncate(rep.tweet_text, 120)}</td>
-      <td>${truncate(rep.reply_text, 160)}</td>
+      <td>@${escapeHtml(rep.author_handle || '')}</td>
+      <td>${escapeHtml(truncate(rep.tweet_text, 120))}</td>
+      <td>${escapeHtml(truncate(rep.reply_text, 160))}</td>
       <td>${badgeMode(rep.mode, rep.dry_run)}</td>
     </tr>`).join('');
   document.getElementById('reply-body').innerHTML = rows || '<tr><td colspan="5" style="color:var(--muted)">No replies yet</td></tr>';
@@ -187,7 +214,7 @@ async def dashboard():
 
 
 @app.get("/api/stats")
-async def api_stats():
+async def api_stats(_: None = Depends(_require_auth)):
     return {
         "paused": database.is_paused(),
         "dry_run": DRY_RUN,
@@ -198,7 +225,7 @@ async def api_stats():
 
 
 @app.post("/api/pause")
-async def api_pause(body: dict):
+async def api_pause(body: dict, _: None = Depends(_require_auth)):
     paused = body.get("paused", True)
     database.set_paused(paused)
     status = "paused" if paused else "resumed"
@@ -207,38 +234,58 @@ async def api_pause(body: dict):
 
 
 @app.post("/api/trigger-tweet")
-async def api_trigger_tweet():
+async def api_trigger_tweet(_: None = Depends(_require_auth)):
+    if _lock_tweet.locked():
+        return {"status": "skipped", "reason": "already_in_progress", "dry_run": DRY_RUN}
+    async def _run():
+        async with _lock_tweet:
+            await bot.post_original_tweet()
+    asyncio.create_task(_run())
     logger.info("Manual original tweet trigger via API")
-    asyncio.create_task(bot.post_original_tweet())
     return {"status": "triggered", "dry_run": DRY_RUN}
 
 
 @app.post("/api/trigger-mentions")
-async def api_trigger_mentions():
+async def api_trigger_mentions(_: None = Depends(_require_auth)):
+    if _lock_mentions.locked():
+        return {"status": "skipped", "reason": "already_in_progress", "dry_run": DRY_RUN}
+    async def _run():
+        async with _lock_mentions:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, bot.poll_mentions)
+    asyncio.create_task(_run())
     logger.info("Manual mentions poll trigger via API")
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, bot.poll_mentions)
     return {"status": "triggered", "dry_run": DRY_RUN}
 
 
 @app.post("/api/trigger-follower-poll")
-async def api_trigger_follower_poll():
+async def api_trigger_follower_poll(_: None = Depends(_require_auth)):
+    if _lock_follower_poll.locked():
+        return {"status": "skipped", "reason": "already_in_progress", "dry_run": DRY_RUN}
+    async def _run():
+        async with _lock_follower_poll:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, bot.poll_follower_tweets)
+    asyncio.create_task(_run())
     logger.info("Manual follower tweet poll trigger via API")
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, bot.poll_follower_tweets)
     return {"status": "triggered", "dry_run": DRY_RUN}
 
 
 @app.post("/api/trigger-qt-glazer")
-async def api_trigger_qt_glazer():
+async def api_trigger_qt_glazer(_: None = Depends(_require_auth)):
+    if _lock_qt_glazer.locked():
+        return {"status": "skipped", "reason": "already_in_progress", "dry_run": DRY_RUN}
+    async def _run():
+        async with _lock_qt_glazer:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, bot.poll_qt_glazer_list)
+    asyncio.create_task(_run())
     logger.info("Manual QT Glazer poll trigger via API")
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, bot.poll_qt_glazer_list)
     return {"status": "triggered", "dry_run": DRY_RUN}
 
 
 @app.post("/api/reset-counter")
-async def api_reset_counter():
+async def api_reset_counter(_: None = Depends(_require_auth)):
     shifted = database.reset_daily_reply_counter()
     logger.info("Daily reply counter reset via API, shifted %d rows", shifted)
     return {"status": "reset", "rows_shifted": shifted, "replies_today": database.count_replies_today()}
@@ -250,5 +297,5 @@ async def health():
 
 
 @app.get("/api/status")
-async def api_status():
+async def api_status(_: None = Depends(_require_auth)):
     return {"status": "ok"}

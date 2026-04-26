@@ -1,6 +1,7 @@
 import os
 import re
 import json as _json
+import time
 import aiohttp
 import asyncio
 import logging
@@ -148,8 +149,7 @@ async def _fetch_dexscreener(session: aiohttp.ClientSession, contract_address: s
                     if created_at:
                         result["pair_created_at"] = created_at
                         try:
-                            import time as _time
-                            age_seconds = _time.time() - created_at / 1000 if created_at > 1e10 else 0
+                            age_seconds = time.time() - created_at / 1000 if created_at > 1e10 else 0
                             if age_seconds > 0:
                                 result["age_days"] = age_seconds / 86400
                         except Exception:
@@ -483,7 +483,7 @@ async def scrape_all_data() -> list[dict]:
             dex_results = await asyncio.gather(*dex_coros, return_exceptions=True)
             for token, dex in zip(with_contract, dex_results):
                 if isinstance(dex, dict) and dex:
-                    token.update({k: v for k, v in dex.items() if v})
+                    token.update({k: v for k, v in dex.items() if v is not None})
                 # Compute staking % from Partner API totals + DexScreener supply
                 contract = token.get("contract_address", "")
                 if contract and staking_totals:
@@ -588,8 +588,7 @@ def fetch_token_data_sync(query: str, timeout: int = 8) -> Optional[dict]:
         if created_at:
             result["pair_created_at"] = created_at
             try:
-                import time as _time
-                age_seconds = _time.time() - created_at / 1000 if created_at > 1e10 else 0
+                age_seconds = time.time() - created_at / 1000 if created_at > 1e10 else 0
                 if age_seconds > 0:
                     result["age_days"] = age_seconds / 86400
             except Exception:

@@ -4,7 +4,7 @@ Printr Partner API client.
 Auth: form-encoded POST /login with inviteCode → JWT cookie.
 Staking: POST /v1/staking/list-positions → paginate, aggregate by contract.
 
-API key (invite code): set PRINTR_API_KEY env var, defaults to deci-a5b21e4f.
+API key (invite code): set PRINTR_API_KEY env var.
 """
 import os
 import asyncio
@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 
 _PRINTR_API_BASE = "https://api-preview.printr.money/v1"
 _PRINTR_LOGIN_URL = "https://api-preview.printr.money/login"
-_PRINTR_INVITE_CODE = os.environ.get("PRINTR_API_KEY", "deci-a5b21e4f")
+_PRINTR_INVITE_CODE = os.environ.get("PRINTR_API_KEY", "")
+if not _PRINTR_INVITE_CODE:
+    logging.getLogger(__name__).warning("PRINTR_API_KEY not set — staking data will be unavailable")
 
 # Solana mainnet CAIP-2 chain ID used by the Printr API
 _SOLANA_CHAIN_ID = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
@@ -48,10 +50,6 @@ def _authenticate_sync() -> Optional[str]:
     )
     # The login endpoint returns 307 redirect with a Set-Cookie header.
     # We must NOT follow redirects so we can read the cookie before it's dropped.
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPRedirectHandler.__new__(urllib.request.HTTPRedirectHandler)
-    )
-    # Disable redirect following
     class _NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             return None

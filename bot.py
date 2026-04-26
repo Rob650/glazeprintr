@@ -29,10 +29,6 @@ from twitter_client import (
     fetch_tweet_chain, fetch_user_tweets, search_keyword_tweets, fetch_bot_followers,
     QUOTE_TWEET_FORBIDDEN,
 )
-# image generation disabled
-# from image_generator import (
-#     generate_glaze_score_card, generate_ecosystem_stats_card, remix_tweet_image,
-# )
 import memory as mem
 from scraper import scrape_all_data, fetch_token_data_sync, format_comparative_context
 
@@ -692,7 +688,6 @@ def poll_qt_glazer_list():
         if tweet_text.startswith("RT @"):
             logger.debug(f"QT skip {tweet_id}: retweet")
             continue
-
 
         if not _is_recent_tweet(tweet, _QT_GLAZER_WINDOW_MINUTES):
             age = _tweet_age_minutes(tweet)

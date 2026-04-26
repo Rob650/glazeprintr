@@ -3,6 +3,7 @@ import os
 import json
 import random
 import re
+import time
 import anthropic
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import get_recent_openers, add_opener, get_ecosystem_tweets, get_last_ticker, set_last_ticker, get_recent_tickers, add_recent_ticker
@@ -219,8 +220,6 @@ def _extract_opener(text: str) -> str:
     if not text:
         return ""
     return text.strip().split()[0].lower().rstrip(".,!?:")
-
-os.environ.setdefault("ANTHROPIC_API_KEY", "YOUR_ANTHROPIC_API_KEY_HERE")
 
 SYSTEM_PROMPT_BASE = """RULE ZERO: Never make up numbers. Only cite a stat if it appears in the LIVE DATA injected into this message. Training data doesn't count. Memory doesn't count. If a number isn't shown, you don't have it.
 
@@ -737,8 +736,7 @@ def _format_token_data_block(token_data: dict) -> str:
     else:
         created = token_data.get("pair_created_at")
         if created:
-            import time as _time
-            age_d = (_time.time() - created / 1000) / 86400 if created > 1e10 else None
+            age_d = (time.time() - created / 1000) / 86400 if created > 1e10 else None
             if age_d is not None:
                 if age_d < 1:
                     lines.append(f"  Token age: {age_d*24:.1f} hours")
@@ -821,7 +819,7 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
 def generate_original_tweet(market_data: list[dict] = None, memory_context: str = "",
                             top_tickers: list[str] = None,
                             ecosystem_comparative: str = "",
-                            dune_context: str = "") -> str:
+                            dune_context: str = "") -> tuple[str, str | None]:
     system = SYSTEM_PROMPT_BASE + "\n\n" + ORIGINAL_TWEET_PROMPT
 
     ecosystem_ctx = get_ecosystem_context_for_prompt()
@@ -1210,11 +1208,27 @@ def _get_tier(score: int) -> str:
     return "MAXIMUM GLAZE"
 
 
+_CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+_RETRY_STATUS_CODES = {429, 500, 529}
+
+
 def _call_claude(system: str, user_message: str, max_tokens: int = 150) -> str:
-    response = get_client().messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user_message}],
-    )
-    return response.content[0].text.strip()
+    last_exc = None
+    for attempt in range(3):
+        try:
+            response = get_client().messages.create(
+                model=_CLAUDE_MODEL,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user_message}],
+            )
+            return response.content[0].text.strip()
+        except anthropic.APIStatusError as e:
+            if e.status_code in _RETRY_STATUS_CODES and attempt < 2:
+                last_exc = e
+                time.sleep(2 ** attempt)
+                continue
+            raise
+        except Exception:
+            raise
+    raise last_exc
