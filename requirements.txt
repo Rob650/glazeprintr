@@ -1,8 +1,6 @@
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
 tweepy==4.14.0
-anthropic==0.40.0
+anthropic>=0.49.0
 apscheduler==3.10.4
 aiohttp==3.11.10
-Pillow>=10.0.0
-cloudscraper>=1.2.71

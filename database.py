@@ -33,15 +33,17 @@ def init_db():
         try:
             conn.execute("ALTER TABLE memory_project_data ADD COLUMN staking_pct REAL")
             conn.commit()
-        except Exception:
-            pass  # Column already exists
+        except sqlite3.OperationalError as e:
+            if "already exists" not in str(e):
+                raise
 
         # Migrate: add our_reply_tweet_id column to replied_tweets
         try:
             conn.execute("ALTER TABLE replied_tweets ADD COLUMN our_reply_tweet_id TEXT")
             conn.commit()
-        except Exception:
-            pass  # Column already exists
+        except sqlite3.OperationalError as e:
+            if "already exists" not in str(e):
+                raise
 
         # Migrate: add ecosystem_tweets table if missing
         conn.executescript("""
@@ -143,6 +145,12 @@ def init_db():
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('qt_glazer_since_id', '');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_ticker', '');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('recent_tickers', '[]');
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('recent_openers', '');
+
+            CREATE INDEX IF NOT EXISTS idx_replied_created ON replied_tweets(created_at);
+            CREATE INDEX IF NOT EXISTS idx_glaze_created ON glaze_scores(created_at);
+
+            DELETE FROM memory_project_data WHERE created_at < datetime('now', '-7 days');
 
             CREATE TABLE IF NOT EXISTS qt_glazer_quotes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1,0 +1,6 @@
+.claude/
+*.db
+.env
+__pycache__/
+.git/
+test_*.py

@@ -524,7 +524,7 @@ def get_flywheel_context(active_tokens: list[str]) -> str:
 
 def get_ecosystem_momentum_context(active_tickers: list[str]) -> str:
     """
-    Returns pattern context when 3+ ecosystem tokens show strength simultaneously.
+    Returns pattern context when 2+ ecosystem tokens show strength simultaneously.
     Focuses on the coordinated launch parallel (LetsBonk BONK OGs).
     """
     if len(active_tickers) < 2:

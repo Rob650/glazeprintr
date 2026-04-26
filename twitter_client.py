@@ -4,7 +4,6 @@ import tweepy
 import logging
 from datetime import datetime, timezone, timedelta
 
-from database import set_stream_status
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +162,8 @@ def _clean_tweet(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
     if not text.rstrip().endswith('🙏'):
         text = text.rstrip() + '\n\n🙏'
-    return text[:280]
+    # Twitter weighted character count (emoji, URLs count differently); 270 leaves buffer
+    return text[:270]
 
 
 def _clean_qt_body(text: str, url_suffix: str) -> str:
@@ -267,7 +267,10 @@ def post_quote_tweet(
         logger.info(f"Posted quote tweet {tweet_id} (media={media_status}): {full_text[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
-        logger.error(f"post_quote_tweet failed quoting tweet_id={quote_tweet_id}")
+        resp = getattr(e, "response", None)
+        if getattr(resp, "status_code", None) == 403:
+            logger.error(f"post_quote_tweet: 403 Forbidden for tweet_id={quote_tweet_id}")
+            return QUOTE_TWEET_FORBIDDEN
         _log_post_error("Failed to post quote tweet", e)
         return None
 
@@ -523,82 +526,7 @@ def fetch_tweet_chain(tweet_id: str, max_depth: int = 5) -> list[dict]:
                 break
 
         except tweepy.TweepyException as e:
-            _log_post_error(f"Failed to fetch tweet {current_id}", e)
+            logger.error(f"Failed to fetch tweet {current_id}: {e}")
             break
 
     return list(reversed(chain))
-
-
-def setup_stream_rules(keywords: list[str]):
-    streaming_client = tweepy.StreamingClient(bearer_token=os.environ.get("X_BEARER_TOKEN"))
-    try:
-        existing = streaming_client.get_rules()
-        if existing.data:
-            ids = [r.id for r in existing.data]
-            streaming_client.delete_rules(ids)
-            logger.info(f"Deleted {len(ids)} existing stream rules")
-    except tweepy.TweepyException as e:
-        logger.error(f"Error clearing stream rules: {e}")
-
-    rule_parts = [f'"{kw}"' if " " in kw else kw for kw in keywords]
-    rule = " OR ".join(rule_parts)
-    rule += f" -is:retweet -from:{BOT_HANDLE}"
-
-    try:
-        streaming_client.add_rules(tweepy.StreamRule(rule))
-        logger.info(f"Added stream rule: {rule[:120]}...")
-    except tweepy.TweepyException as e:
-        logger.error(f"Failed to add stream rules: {e}")
-
-
-class GlazePrintrStream(tweepy.StreamingClient):
-    def __init__(self, on_tweet_callback, **kwargs):
-        super().__init__(
-            bearer_token=os.environ.get("X_BEARER_TOKEN"),
-            **kwargs
-        )
-        self._on_tweet = on_tweet_callback
-
-    def on_response(self, response):
-        if response.errors:
-            self.on_errors(response.errors)
-
-        tweet = response.data
-        if tweet is None:
-            return
-
-        # Skip tweets with restricted reply settings — we'd get a 403 anyway.
-        reply_settings = getattr(tweet, "reply_settings", "everyone")
-        if reply_settings and reply_settings != "everyone":
-            logger.debug(f"Skipping tweet {tweet.id} — reply_settings={reply_settings}")
-            return
-
-        users = {}
-        if response.includes and "users" in response.includes:
-            for u in response.includes["users"]:
-                users[u.id] = u.username
-
-        in_reply_to_tweet_id = None
-        for ref in (getattr(tweet, "referenced_tweets", None) or []):
-            if hasattr(ref, "type") and ref.type == "replied_to":
-                in_reply_to_tweet_id = str(ref.id)
-                break
-
-        author_handle = users.get(tweet.author_id, "unknown") if tweet.author_id else "unknown"
-
-        self._on_tweet({
-            "id": str(tweet.id),
-            "text": tweet.text,
-            "author_id": str(tweet.author_id) if tweet.author_id else "",
-            "author_handle": author_handle,
-            "in_reply_to_tweet_id": in_reply_to_tweet_id,
-            "created_at": getattr(tweet, "created_at", None),
-        })
-
-    def on_errors(self, errors):
-        logger.error(f"Stream error: {errors}")
-        set_stream_status("disconnected")
-
-    def on_connection_error(self):
-        logger.error("Stream connection error")
-        set_stream_status("disconnected")

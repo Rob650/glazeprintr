@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 ECOSYSTEM_TOKENS = [
     "belief", "ooo", "rotus", "fatchoi", "deployr", "patapim",
-    "roi", "noob", "print", "cmyk", "pve", "ket", "fsjal", "marmot",
+    "roi", "print", "cmyk", "pve", "fsjal",
+    "brrr", "quack", "lfp", "stakr", "pob500",
 ]
 
 NARRATIVE_PATTERNS = [
