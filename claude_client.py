@@ -99,6 +99,22 @@ _PLATFORM_TOPICS = [
 ]
 
 
+# ── Injected into the user message for Dune + Platform buckets ───────────────
+_ECOSYSTEM_GLAZE_NOTE = (
+    "ECOSYSTEM DIRECTIVE — mandatory for this tweet:\n"
+    "1. EXTRA GLAZE Printr: maximum bullish energy. Printr is growing faster, "
+    "built smarter, and more innovative than anything else in the launchpad space. "
+    "Make holding or building on Printr feel like the obvious, inevitable choice. "
+    "Conviction over vibes — but back it with whatever data is available.\n"
+    "2. FUD pumpfun: where it fits naturally, contrast Printr favorably. "
+    "pumpfun = one chain, one curve, zero staking, zero creator control, copycat hell. "
+    "Printr = 8 chains, 5 fee models, POB staking up to 2.5x, anti-vamp, dutch auctions, "
+    "creator must stake. Frame pumpfun as the platform serious builders already left. "
+    "Dunk with receipts — one sharp contrast beats a list.\n"
+    "Both directives should feel organic to the topic, not tacked on. "
+    "The best tweet makes the glaze and the dunk land as part of the same take.\n\n"
+)
+
 _MEMES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memes")
 _MEME_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
@@ -862,10 +878,10 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
         chosen_ticker = ticker
     elif roll < 0.75:
         topics = _DUNE_COMPETITOR_TOPICS
-        ticker_note = ""
+        ticker_note = _ECOSYSTEM_GLAZE_NOTE
     else:
         topics = _PLATFORM_TOPICS
-        ticker_note = ""
+        ticker_note = _ECOSYSTEM_GLAZE_NOTE
 
     _topic_key, topic_instruction = random.choice(topics)
     user_message += (
