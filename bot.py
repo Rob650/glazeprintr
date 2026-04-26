@@ -79,7 +79,7 @@ _QT_GLAZER_KEYWORDS = frozenset([
     "printr", "brrr", "belief", "rotus", "deployr", "fatchoi",
     "stakrr", "masterprintr", "glaze", "glazeprintr", "staking",
     "pob", "print", "noob", "cmyk", "patapim", "marmot", "fsjal", "ket",
-    "pve", "roi", "ooo", "prinaboratory", "quack", "lfp", "stakr",
+    "pve", "roi", "ooo", "prinaboratory", "quack", "lfp", "stakr", "pob500",
 ])
 _QT_GLAZER_WINDOW_MINUTES = 20  # wider window for 10-min poll interval
 
