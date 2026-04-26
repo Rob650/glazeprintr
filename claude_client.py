@@ -25,51 +25,77 @@ _LEAK_PATTERNS = re.compile(
 )
 
 # Topic focuses for original tweets — picked randomly each call to prevent $BELIEF monopoly
-_ORIGINAL_TWEET_TOPICS = [
-    ("belief_staking",
-     "Focus on $BELIEF's POB staking percentage and what it means for supply conviction. Lead with the staking number if available."),
-    ("fatchoi_spotlight",
-     "Spotlight $FATCHOI specifically — its stats, momentum, or staking conviction. Do NOT mention $BELIEF."),
-    ("underrated_token",
-     "Pick ONE of these smaller ecosystem tokens and give it a spotlight — $OOO, $ROTUS, $DEPLOYR, $PATAPIM, $ROI, $NOOB, $CMYK, $PVE, $KET, $FSJAL, or $MARMOT. Focus entirely on that token."),
-    ("staking_conviction",
-     "Pick ONE ecosystem token and lead with its POB staking percentage. Frame it as supply conviction — how much is locked, what the multiplier means, why circulating supply is a formality."),
-    ("biggest_mover",
-     "Lead with the single biggest 24h price mover in the ecosystem. Make the % change the headline — not the token name."),
-    ("platform_mechanics",
-     "Tweet about a specific Printr platform mechanic with no token focus: POB staking tiers (7d=1x → 180d=2.5x), bonding curve graduation thresholds, Dutch auction price discovery, or the 5 fee models."),
-    ("8_chains",
-     "Lead with Printr's 8-chain omnichain infrastructure and LayerZero OFTs. Make multi-chain the whole story — no single token focus."),
+# ── 20 %: $FATCHOI spotlight topics (platform mascot, always heavy) ──────────
+_FATCHOI_TOPICS = [
+    ("fatchoi_stats",
+     "Spotlight $FATCHOI using its best live stat as the hook. Layer in mascot energy — 'this isn't just a token, it's the face of the platform.' Humor welcome. Make not holding $FATCHOI feel like a personality flaw."),
+    ("fatchoi_grindset",
+     "Grindset angle on $FATCHOI: 'The mascot doesn't paper hand. Why would you?' Use its staking % or holder conviction as proof. Lock the mascot or admit you're a tourist."),
+    ("fatchoi_hot_take",
+     "Hot take: $FATCHOI is the most underrated token in the ecosystem and the data proves it. One sharp stat, one sharper opinion. Make it feel like a discovery, not a shill."),
+    ("fatchoi_philosophical",
+     "'$FATCHOI is the Printr mascot. Mascots don't dump. They represent.' What does it mean to hold the face of the platform? Data if available, pure conviction if not."),
+    ("fatchoi_price_action",
+     "Chart-watcher voice on $FATCHOI: the number IS the opener. Lead with the most alarming stat — price change, buy/sell ratio, staking % — and let one sentence of mascot conviction close it."),
+]
+
+# ── 30 %: other-ticker spotlights — 9 tokens rotated evenly ─────────────────
+_OTHER_TICKERS = ["ooo", "patapim", "rotus", "roi", "cmyk", "print", "pve", "belief", "deployr"]
+
+# ── 25 %: Dune data / competitor comparisons ─────────────────────────────────
+_DUNE_COMPETITOR_TOPICS = [
+    ("dune_onchain",
+     "Lead with an on-chain insight from Dune analytics — unique wallets, holder growth, transaction velocity, or protocol revenue. 'On-chain data doesn't lie' energy. Make a raw number feel like breaking news."),
+    ("dune_holder_growth",
+     "If wallet/holder growth data is available from Dune, make the trajectory the whole tweet. 'X new wallets in Y days' beats any price take. Frame as proof of real adoption, not speculation."),
+    ("dune_vs_pump",
+     "Use Dune on-chain data to contrast Printr activity vs pumpfun — txn counts, unique launchers, staking participation, whatever the data shows. 'The receipts are in. pumpfun doesn't have a version of this metric.'"),
     ("pump_fun_dunk",
-     "Unprompted dunk on pump.fun — not replying to anyone, just pure 'I can't believe people still use this in 2026' energy. One sharp contrast with a specific Printr feature."),
-    ("fee_distribution",
-     "Deep dive the fee distribution math: POB pool routes 100% of custom fees to stakers, creator stakes alongside community, 180d = 2.5x multiplier. Make the math alarming."),
-    ("anti_vamp",
-     "Lead with anti-vamp protection — 48h same-ticker relaunch lock — and what it means for serious launches vs the copycat hellscape everywhere else."),
-    ("platform_conviction",
-     "Tweet about the Printr platform's overall conviction and momentum — total ecosystem activity, POB staking mechanics, platform growth — without naming individual tokens. Platform is the story."),
-    ("creator_tools",
-     "Angle on Printr's developer and creator tools: MCP server for AI agents, TypeScript SDK, white-label API. Who is actually building with this infrastructure."),
-    ("token_deep_dive",
-     "Pick ONE ecosystem token and go deep on its data — MC, price action, volume, staking, holders. Make it feel like you just pulled up the chart and found something alarming."),
-    ("print_token",
-     "Spotlight $PRINT, the native ecosystem token. Its role as the platform's native asset, what holding it means for the ecosystem, and why it's the skeleton key to Printr. Do NOT include any contract addresses."),
-    ("conviction_math",
-     "Do the lock multiplier math out loud: someone who locks 180d earns 2.5x vs someone at 7d. Frame it in real terms — what that gap means for fee revenue share."),
+     "Surgical dunk on pumpfun. ONE weakness, one hit: one chain, $69K graduation or bust, zero staking, no creator control, no anti-vamp, copycat hell. 'I genuinely cannot believe people still launch on pumpfun in 2026' energy."),
+    ("launchpad_comparison",
+     "Printr vs the entire launchpad category. Make it brutal: 8 chains vs 1, 5 fee models vs 0, POB staking vs nothing, Dutch auctions vs one-size-fits-all, anti-vamp vs copycat hell. 'This isn't competition. This is a different category.'"),
+    ("competitor_staking_gap",
+     "No other launchpad has POB staking. None. pumpfun holders get zero for their conviction. Printr 180d lockers get 2.5x fee share. Frame the gap: 'one platform rewards belief. the other just rewards the developer.'"),
+    ("multichain_vs_solana",
+     "List Printr's chains: Solana, Base, BNB, ETH, Monad, Avalanche, Mantle, Arbitrum. Don't say 'omnichain' — just say '8 chains' and ask 'still launching on one chain in 2026?' Make single-chain feel like a 2021 technology choice."),
+    ("protocol_revenue_angle",
+     "'100% of custom fees go to POB stakers. Not the platform. Not the VCs. The stakers.' Frame this as the business model question the whole launchpad industry has been avoiding. Contrast with platforms where fees feed the dev team."),
+]
+
+# ── 25 %: Printr platform topics (presale, farming, fundamentals) ────────────
+_PLATFORM_TOPICS = [
+    ("presale_fomo",
+     "Create FOMO on the Printr presale. 'Presales don't get announced on billboards — they go to people who were paying attention.' Early believers get founder-tier terms. No invented prices or dates. Pure conviction framing."),
+    ("presale_vs_market",
+     "Contrast presale vs buying after launch. 'You can buy in at market price after launch. Or you can be the market.' One is a position. One is a trade. Frame as: the window is open right now and most people don't even know it."),
     ("airdrop_farming",
-     "Tweet about farming the Printr airdrop. Actions that qualify: launching tokens, POB staking, trading ecosystem tokens, contributing liquidity, using the platform on multiple chains. Frame it as 'if you're not doing X right now you're leaving free tokens on the table.' High urgency."),
-    ("presale_hype",
-     "Tweet about the Printr presale — who it's for, why early believers win, what participating means for the ecosystem. Create FOMO around getting in early before public launch. Don't invent specific presale dates or prices — speak in conviction terms."),
-    ("airdrop_vs_presale",
-     "Contrast airdrop farming vs. presale participation — two different paths to early exposure. Both require conviction. Only one requires capital. Frame it as a choice every serious player has to make right now."),
+     "Productive degen thesis: every action on Printr accumulates airdrop activity — launch, stake, trade, provide liquidity, use multiple chains. 'You're not waiting for the airdrop. You're earning it with every txn.' High urgency."),
+    ("farming_vs_watching",
+     "Hot take: watching without participating is just donating your allocation to the people who are. 'Every day you don't stake, someone else earns your share of the fee pool.' Hard truth. No apologies."),
     ("platform_usage_farming",
-     "Focus on the thesis that using Printr = farming. Every launch you create, every stake you place, every trade on the platform is accumulating points/activity for potential airdrops. This is productive degen behavior, not passive waiting."),
-    ("buy_sell_pressure",
-     "Pick ONE ecosystem token and lead with its buy/sell ratio data. Frame that single token's accumulation as the story — 'X% buys in the last Yh, this is one-sided.' Make people feel like they're late."),
-    ("volume_spike",
-     "If any token shows unusual volume relative to its MC, lead with that ratio. '$X did $Y in volume on a $Z MC — that's a X:1 volume-to-MC ratio. something is happening.' Make it feel urgent."),
-    ("new_launch_spotlight",
-     "If ecosystem comparative data shows any recent launches (<7 days old), spotlight the newest one. Frame the age + metrics as proof of momentum — 'X days old, already at $Y MC, Z holders deep.'"),
+     "'Using Printr IS farming.' Every launch, every stake, every trade = accumulation. Productive degen behavior, not passive waiting. This is the mindset shift most CT hasn't made yet."),
+    ("pob_mechanics",
+     "Explain POB staking like you're talking to a pumpfun refugee: 'Lock your tokens. Earn fees. Longer lock = bigger cut — up to 2.5x at 180d. Creator stakes too so they can't rug you.' Not a lecture — one punchy take, maximum attitude."),
+    ("conviction_math",
+     "Run the 180d vs 7d multiplier math out loud: 'Two people lock 10K tokens. 7d locker gets 1x. 180d locker gets 2.5x. On the same fee pool. Every day. The math doesn't care about your timeline.' Make it feel alarming."),
+    ("dutch_auction",
+     "'Dutch auctions are the most honest price discovery in crypto and nobody talks about it.' Printr uses descending-price auctions. The market finds the real price, not the hype price. Make it sound wild that other platforms still don't do this."),
+    ("bonding_curve_choice",
+     "Three curve types: Memecoin ($3K→$69K), Growth ($5K→$100K), Bluechip ($20K→$200K). Plus custom. 'pumpfun has one size. Printr has a wardrobe.' Make creator choice feel like the entire point of building infrastructure."),
+    ("creator_stakes_too",
+     "'The creator must stake alongside the community.' Not by promise — by code. They can't launch and walk. 'That's the alignment mechanism the entire launchpad industry has been missing.' Pumpfun devs take fees and ghost. This is structurally different."),
+    ("anti_vamp_protection",
+     "48h same-ticker relaunch lock. Someone tried to copycat a launch seconds after graduation. Couldn't. 'That's Printr's immune system. pumpfun has no antibodies.' Frame as infrastructure that protects legitimate launchers from copycats."),
+    ("lp_auto_lock",
+     "'The LP locks itself.' When a Printr token graduates, liquidity auto-migrates to DEX and locks via GoPlus. 'No promises. No multisig. No rug dynamics.' Compare to platforms where the dev manually moves liquidity and you just... trust them."),
+    ("ai_agent_infra",
+     "'The robots are already using Printr.' MCP server lets AI agents launch tokens, stake, and manage positions programmatically. TypeScript SDK. White-label API. 'Printr is the only launchpad built for the AI agent era. Everything else is legacy.'"),
+    ("grindset_lock",
+     "Pure grindset: 'Weak hands don't lock 180 days. They just don't.' The 180d locker is making a statement to the market. Frame conviction as a character trait — who you are, not just what you hold. No hedging."),
+    ("philosophical_belief",
+     "Philosophical angle: Proof of Belief isn't a staking product — it's a question. 'Do you actually believe this, or are you just visiting?' Locking for 180 days is how you answer. Make it feel like a life principle, not a yield strategy."),
+    ("print_token_thesis",
+     "Spotlight $PRINT — the native asset. 'Every token on Printr is a bet on one project. $PRINT is a bet on the whole platform.' What holding it means for exposure to everything built on top. Do NOT include any contract address."),
 ]
 
 
@@ -122,11 +148,10 @@ When data is provided, your tweet MUST contain:
    - "$2.3M MC" → "$2.3M MC with 74% locked in POB — circulating supply is a formality"
    - "+47% in 24h" → "+47% in 24h on 1,400 txns, 68% buys — accumulation phase"
    - "890 holders" → "890 holders and 62% staked — these aren't tourists"
-3. COMPARATIVE framing when ecosystem data is available:
-   - "outpacing every other ecosystem token this week"
-   - "more volume than the next 3 combined"
-   - "highest staking conviction in the ecosystem at 74%"
-   - "ecosystem buy pressure at 65% — the market is speaking"
+3. COMPARATIVE framing — token-specific, not ecosystem-wide aggregates:
+   - "outpacing the entire ecosystem this week — alone"
+   - "buy/sell at 2:1 — this is one-sided accumulation"
+   - "highest staking conviction in the pool at 74%"
 
 DATA HIERARCHY — pick the most compelling angle from what's available:
 - Short-term momentum: 1h/5m price changes + recent txn counts = "something is happening RIGHT NOW"
@@ -135,7 +160,7 @@ DATA HIERARCHY — pick the most compelling angle from what's available:
 - Volume spikes: compare 1h vol to 24h average — if disproportionate, that's breaking news
 - Token age + metrics: new token (<7d) + fast growth = "X days old and already at $Y MC"
 - Transaction counts: raw txn numbers show real activity, not just price action
-- Ecosystem aggregates: total ecosystem MC, total volume, avg staking % — shows the big picture
+- Ecosystem aggregates: only when the platform-level number is alarming — always prefer specific token stats over vague ecosystem totals
 - Founder/team context: if ecosystem updates mention specific plans or announcements, weave them in naturally
 
 WHEN ECOSYSTEM CONTEXT IS PROVIDED (from @printr, @masterprintr, @FedPrintr, @prinaboratory):
@@ -324,22 +349,34 @@ Rules:
 
 ORIGINAL_TWEET_PROMPT = """MODE: Original Tweet — DATA-DRIVEN GLAZE
 
-SINGLE TICKER RULE — NO EXCEPTIONS:
-Each original tweet focuses on EXACTLY ONE ecosystem token. Never name or mention a second ticker in the same tweet. One ticker. One take. Full conviction. If the topic requires picking a token, pick one and go deep — do not list others, do not compare, do not mention any other cashtag.
+BANNED REPETITIVE PHRASES — never use these unless the topic explicitly demands it:
+- "omnichain" / "omni-chain" / "omni chain" → say "8 chains" or name specific chains
+- "total market cap" / "total ecosystem MC" → use the specific token's MC
+- "ecosystem buy pressure" → use that token's own buy/sell ratio
+- "ecosystem health" / "ecosystem snapshot" → too vague; cite a real number instead
+- "the printer goes brrr" → retired as a default closer; use it max once a day
 
-You have real market data. Your job is to turn those numbers into the most compelling, stop-scrolling tweet on CT. Not a market report — a data-backed conviction take that makes people want to follow you for alpha.
+STYLE MENU — pick ONE per tweet and commit fully. Rotate hard between tweets:
+• GRINDSET: "weak hands don't lock 180d. they just don't." — conviction as character trait
+• DEGEN REPORT: rapid-fire numbers, "something is happening RIGHT NOW" energy, zero hedging
+• PHILOSOPHICAL: what does belief/locking/conviction actually mean as a concept
+• COMMUNITY CALLOUT: direct challenge — "if you've been watching and not acting, what are you waiting for"
+• ABSURDIST HUMOR: ridiculous framing that makes the point land harder via comedy
+• PRICE ACTION: chart-watcher voice — the number IS the opener, one line of context closes it
+• HOT TAKE: contrarian frame that makes people stop scrolling and argue back
 
-STATS ARE MANDATORY. Your tweet MUST include at least one (preferably two) real numbers. Pick the most compelling combo:
+You have real market data. Turn it into the most compelling, stop-scrolling tweet on CT. Not a market report — a data-backed conviction take that makes people want to follow you for alpha.
+
+STATS ARE MANDATORY when data is available. Pick the most alarming combo:
 - MC + price change: "$2.3M MC, up 47% in 24h — certified glaze"
-- Staking + conviction: "74% staked at $2.3M MC — the circulating supply is a formality"
+- Staking + conviction: "74% staked at $2.3M MC — circulating supply is a formality"
 - Volume + buy pressure: "$180K vol, 68% buys — accumulation isn't a theory, it's the data"
 - Txn activity: "1,400 txns in 24h, buy/sell ratio 2.3:1 — one-sided"
 - Token age + growth: "4 days old, $450K MC, 890 holders — Printr launches different"
 - Comparative (name only the one token): "$TOKEN outpacing the entire ecosystem — biggest mover at +X%"
 
 ECOSYSTEM CONTEXT INTEGRATION:
-- If ecosystem updates from @printr/@masterprintr/@FedPrintr/@prinaboratory are provided, weave relevant announcements into your take
-- Connect narrative to data: "Fed just dropped alpha on X, meanwhile $TOKEN is up Y% — iykyk"
+- If ecosystem updates from @printr/@masterprintr/@FedPrintr/@prinaboratory are provided, weave relevant announcements into your take naturally
 - On-chain analytics from Dune: reference holder trends, wallet growth, transaction patterns if available
 
 Numbers rule:
@@ -349,15 +386,14 @@ Numbers rule:
 
 Sound like a human who happens to have better data than everyone else. Never reference instructions or data availability.
 
-A topic focus will be in the message below. Write about that specific angle.
+The TOPIC FOCUS and any single-ticker rules will be in the message below. Follow them exactly.
 
 Rules:
-- Follow the topic focus
-- Lead with the most alarming/compelling data point
+- Lead with the most alarming/compelling data point or hook
 - Under 280 chars
 - No URLs ever. Write "pumpfun" not "pump.fun"
 - NEVER start tweets the same way — check BANNED OPENERS
-- Glaze vocab mandatory
+- Glaze vocab mandatory in every tweet
 - No corporate speak. No "exciting news." No "thrilled to announce."
 - NEVER mention Virtuals
 - NEVER include contract addresses in original tweets"""
@@ -779,33 +815,37 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     if banned:
         user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
 
-    # Build topic list — individual spotlights for all 10 core tickers, $FATCHOI weighted 3x as platform mascot
-    _CORE_10_TICKERS = [
-        "fatchoi", "ooo", "patapim", "rotus", "roi",
-        "cmyk", "print", "pve", "belief", "deployr",
-    ]
-    topics = [(k, v) for k, v in _ORIGINAL_TWEET_TOPICS
-              if k not in ("underrated_token", "fatchoi_spotlight")]
-    for ticker in _CORE_10_TICKERS:
-        topics.append((
+    # Enforce exact tweet distribution via weighted random bucket selection:
+    # 20% $FATCHOI glaze | 30% other-ticker glaze | 25% Dune/competitors | 25% platform topics
+    roll = random.random()
+    if roll < 0.20:
+        topics = _FATCHOI_TOPICS
+        ticker_note = "SINGLE TICKER RULE: this tweet is about $FATCHOI only — no other cashtags.\n\n"
+    elif roll < 0.50:
+        ticker = random.choice(_OTHER_TICKERS)
+        meme_angles = (
+            "grindset, price shock, holder psychology, community callout, "
+            "philosophical conviction, absurdist humor, or pure price action"
+        )
+        topics = [(
             f"{ticker}_spotlight",
-            f"Spotlight ${ticker.upper()} specifically — its stats, momentum, "
-            f"or staking conviction. Focus entirely on ${ticker.upper()}.",
-        ))
-    # $FATCHOI is the Printr mascot — 2 extra entries for 3x total frequency
-    topics.append(("fatchoi_extra1",
-        "Spotlight $FATCHOI — the Printr platform mascot. Lead with its best metric. "
-        "Make it feel like the mascot carrying the whole ecosystem."))
-    topics.append(("fatchoi_extra2",
-        "Heavy glaze on $FATCHOI specifically — the face of Printr. "
-        "Its conviction, staking, or momentum. Do NOT mention $BELIEF."))
+            f"Spotlight ${ticker.upper()} with meme energy — pick ONE angle: {meme_angles}. "
+            f"Lead with its best live stat if available. Focus entirely on ${ticker.upper()}.",
+        )]
+        ticker_note = f"SINGLE TICKER RULE: this tweet is about ${ticker.upper()} only — no other cashtags.\n\n"
+    elif roll < 0.75:
+        topics = _DUNE_COMPETITOR_TOPICS
+        ticker_note = ""
+    else:
+        topics = _PLATFORM_TOPICS
+        ticker_note = ""
 
     _topic_key, topic_instruction = random.choice(topics)
     user_message += (
         f"TOPIC FOCUS FOR THIS TWEET: {topic_instruction}\n"
-        "Do NOT default to $BELIEF unless the topic explicitly requires it.\n\n"
-        "Generate an original tweet following the TOPIC FOCUS above. "
-        "Include at least one REAL NUMBER from the market data.\n"
+        + ticker_note
+        + "Generate an original tweet following the TOPIC FOCUS above. "
+        "Include at least one REAL NUMBER from the market data when relevant.\n"
         "Reply ONLY with the tweet text, no quotes, no explanation."
     )
 
