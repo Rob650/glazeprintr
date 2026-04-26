@@ -55,7 +55,7 @@ KNOWN_CONTRACTS: dict[str, str] = {
     "belief": "29CWsqH84TykHDDwA6DtETUtXQPuKbVgKCmxtkBsbrrr",
     "rotus": "C8Lwj83fBz9bPKSUxNLEc2QkLF7oVkV7Ja9UKSFLbrrr",
     "deployr": "8JvDVZK6CHFhwwBUgZcEy18i1xXQzAHfimYarmoobrrr",
-    "fatchoi": "2smh2bkJ2ZRAGhrLSNxgkwPGkptf5BYsfdoWkSmEbrrr",
+    "fatchoi": "57dYAUq7Y4hiCSdAB7iBDg4gcYFq7HeUaEs3XnNkbrrr",
 }
 
 # Key tokens to attempt per-token staking fetch if bulk staking endpoint fails
@@ -698,6 +698,15 @@ def fetch_token_data_sync(query: str, timeout: int = 8) -> Optional[dict]:
         return None
 
     is_contract = bool(_EVM_CONTRACT_RE.match(query) or _SOLANA_CONTRACT_RE.match(query))
+
+    # For known tickers, use their pinned contract address so DexScreener returns the exact token,
+    # not a same-name impostor (e.g. FATCHOI has multiple tokens with the same ticker).
+    if not is_contract:
+        known_contract = KNOWN_CONTRACTS.get(query.lower().lstrip("$"))
+        if known_contract:
+            query = known_contract
+            is_contract = True
+
     url = DEXSCREENER_API.format(query) if is_contract else DEXSCREENER_SEARCH_API.format(query.upper())
 
     dex_data = _fetch_url_sync(url, timeout=timeout)
