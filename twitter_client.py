@@ -3,6 +3,7 @@ import re
 import tweepy
 import logging
 from datetime import datetime, timezone, timedelta
+from urllib.parse import unquote
 
 from database import set_stream_status
 
@@ -13,6 +14,13 @@ _REQUIRED_ENV_VARS = [
     "X_ACCESS_TOKEN", "X_ACCESS_TOKEN_SECRET",
 ]
 _missing = [v for v in _REQUIRED_ENV_VARS if not os.environ.get(v)]
+# Log decoded bearer token prefix to help diagnose URL-encoding issues in Railway
+_bearer_raw = os.environ.get("X_BEARER_TOKEN", "")
+if _bearer_raw and ("%2B" in _bearer_raw or "%3D" in _bearer_raw):
+    logging.getLogger(__name__).warning(
+        "X_BEARER_TOKEN appears URL-encoded in Railway (contains %%2B/%%3D) — auto-decoding. "
+        "Fix by updating Railway env var to the raw token value."
+    )
 if _missing:
     logging.getLogger(__name__).error(
         "Missing required Twitter API env vars: %s — Twitter client will not work",
@@ -32,15 +40,21 @@ _bot_user_id: str | None = None
 _v1_api = None
 
 
+def _get_env(key: str) -> str | None:
+    """Get env var and URL-decode it — Railway sometimes stores tokens with %2B/%3D encoding."""
+    val = os.environ.get(key)
+    return unquote(val) if val else val
+
+
 def get_v2_client() -> tweepy.Client:
     global _v2_client
     if _v2_client is None:
         _v2_client = tweepy.Client(
-            bearer_token=os.environ.get("X_BEARER_TOKEN"),
-            consumer_key=os.environ.get("X_CONSUMER_KEY"),
-            consumer_secret=os.environ.get("X_CONSUMER_SECRET"),
-            access_token=os.environ.get("X_ACCESS_TOKEN"),
-            access_token_secret=os.environ.get("X_ACCESS_TOKEN_SECRET"),
+            bearer_token=_get_env("X_BEARER_TOKEN"),
+            consumer_key=_get_env("X_CONSUMER_KEY"),
+            consumer_secret=_get_env("X_CONSUMER_SECRET"),
+            access_token=_get_env("X_ACCESS_TOKEN"),
+            access_token_secret=_get_env("X_ACCESS_TOKEN_SECRET"),
             wait_on_rate_limit=True,
         )
     return _v2_client
@@ -50,10 +64,10 @@ def get_v1_api() -> tweepy.API:
     global _v1_api
     if _v1_api is None:
         auth = tweepy.OAuth1UserHandler(
-            consumer_key=os.environ.get("X_CONSUMER_KEY"),
-            consumer_secret=os.environ.get("X_CONSUMER_SECRET"),
-            access_token=os.environ.get("X_ACCESS_TOKEN"),
-            access_token_secret=os.environ.get("X_ACCESS_TOKEN_SECRET"),
+            consumer_key=_get_env("X_CONSUMER_KEY"),
+            consumer_secret=_get_env("X_CONSUMER_SECRET"),
+            access_token=_get_env("X_ACCESS_TOKEN"),
+            access_token_secret=_get_env("X_ACCESS_TOKEN_SECRET"),
         )
         _v1_api = tweepy.API(auth)
     return _v1_api
