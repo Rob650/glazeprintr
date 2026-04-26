@@ -13,6 +13,7 @@ from database import (
     get_mentions_since_id, set_mentions_since_id,
     get_list_since_id, set_list_since_id,
     get_keyword_search_since_id, set_keyword_search_since_id,
+    get_follower_search_since_id, set_follower_search_since_id,
     try_claim_mention, try_claim_reply,
     store_ecosystem_tweet, get_ecosystem_context_age_hours,
 )
@@ -22,7 +23,7 @@ from claude_client import (
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
-    fetch_tweet_chain, fetch_user_tweets, search_keyword_tweets,
+    fetch_tweet_chain, fetch_user_tweets, search_keyword_tweets, fetch_bot_followers,
 )
 # image generation disabled
 # from image_generator import (
@@ -485,6 +486,132 @@ def poll_keyword_search():
             continue
         if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
             logger.debug(f"Keyword tweet {tweet['id']} already claimed — skip")
+            continue
+        _handle_tweet(tweet)
+
+
+_follower_cache: list[str] = []  # cached follower usernames
+_follower_cache_refreshed_at: datetime | None = None
+_FOLLOWER_CACHE_TTL_MINUTES = 60
+
+# All four keywords for follower search — followers have prior engagement so noise is less of a concern
+_FOLLOWER_SEARCH_STATIC = ["printr", "brrr", "belief", "pob"]
+
+_follower_search_since_id: str | None = None
+_follower_search_since_id_loaded: bool = False
+
+
+def _maybe_refresh_follower_cache():
+    global _follower_cache, _follower_cache_refreshed_at
+    now = datetime.now(timezone.utc)
+    if _follower_cache_refreshed_at is not None:
+        age_min = (now - _follower_cache_refreshed_at).total_seconds() / 60
+        if age_min < _FOLLOWER_CACHE_TTL_MINUTES:
+            return
+    try:
+        followers = fetch_bot_followers(max_results=500)
+        if followers:
+            _follower_cache = [f["username"] for f in followers]
+            _follower_cache_refreshed_at = now
+            logger.info(f"Follower cache refreshed: {len(_follower_cache)} followers")
+        elif not _follower_cache:
+            logger.warning("Follower cache refresh returned empty — no followers yet")
+    except Exception as e:
+        logger.error(f"Follower cache refresh failed: {e}")
+
+
+def _build_follower_query_batches(usernames: list[str]) -> list[str]:
+    """Split followers into batches, each producing a search query that fits in 512 chars."""
+    bot_handle = os.environ.get("BOT_HANDLE", "printrglazr")
+    tickers = _get_top_tickers(10)
+
+    terms: list[str] = list(_FOLLOWER_SEARCH_STATIC)
+    seen_lower = set(t.lower() for t in terms)
+    for ticker in tickers:
+        cashtag = f"${ticker.upper()}"
+        if cashtag.lower() not in seen_lower:
+            terms.append(cashtag)
+            seen_lower.add(cashtag.lower())
+
+    keyword_part = f"({' OR '.join(terms)})"
+    suffix = f" -is:retweet -is:reply -from:{bot_handle}"
+    # budget for the (from:u1 OR from:u2 OR ...) block including its surrounding space
+    budget = 512 - len(keyword_part) - 1 - len(suffix)
+
+    batches: list[str] = []
+    batch: list[str] = []
+    # track running length of the from-block: 2 for "()", then entries
+    used = 2
+
+    for username in usernames:
+        entry_len = len(f"from:{username}") + (4 if batch else 0)  # " OR " = 4
+        if used + entry_len > budget and batch:
+            from_part = "(" + " OR ".join(f"from:{u}" for u in batch) + ")"
+            batches.append(f"{keyword_part} {from_part}{suffix}")
+            batch = [username]
+            used = 2 + len(f"from:{username}")
+        else:
+            batch.append(username)
+            used += entry_len
+
+    if batch:
+        from_part = "(" + " OR ".join(f"from:{u}" for u in batch) + ")"
+        batches.append(f"{keyword_part} {from_part}{suffix}")
+
+    return batches
+
+
+def poll_follower_tweets():
+    global _follower_search_since_id, _follower_search_since_id_loaded
+
+    if not _follower_search_since_id_loaded:
+        _follower_search_since_id = get_follower_search_since_id()
+        _follower_search_since_id_loaded = True
+
+    _maybe_refresh_follower_cache()
+
+    if not _follower_cache:
+        logger.info("Follower tweet poll skipped — no followers cached yet")
+        return
+
+    queries = _build_follower_query_batches(_follower_cache)
+    if not queries:
+        return
+
+    start_time = None if _follower_search_since_id else (
+        datetime.now(timezone.utc) - timedelta(minutes=_KEYWORD_SEARCH_WINDOW_MINUTES)
+    )
+
+    logger.info(
+        f"Polling follower tweets — {len(_follower_cache)} followers, "
+        f"{len(queries)} batch(es), since_id={_follower_search_since_id}"
+    )
+
+    all_tweets: list[dict] = []
+    for query in queries:
+        batch = search_keyword_tweets(query, since_id=_follower_search_since_id, start_time=start_time)
+        all_tweets.extend(batch)
+
+    logger.info(f"Follower tweet poll found {len(all_tweets)} tweet(s)")
+
+    if not all_tweets:
+        return
+
+    new_since_id = str(max(int(t["id"]) for t in all_tweets))
+    if _follower_search_since_id is None or int(new_since_id) > int(_follower_search_since_id):
+        _follower_search_since_id = new_since_id
+        set_follower_search_since_id(_follower_search_since_id)
+
+    bot_handle_lower = os.environ.get("BOT_HANDLE", "printrglazr").lower()
+    for tweet in all_tweets:
+        if tweet.get("reply_settings", "everyone") != "everyone":
+            logger.debug(f"SKIPPING follower tweet {tweet['id']} — reply_settings={tweet.get('reply_settings')}")
+            continue
+        if tweet.get("in_reply_to_tweet_id") and f"@{bot_handle_lower}" not in tweet.get("text", "").lower():
+            logger.debug(f"SKIPPING follower tweet {tweet['id']} — reply thread, bot not mentioned")
+            continue
+        if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
+            logger.debug(f"Follower tweet {tweet['id']} already claimed — skip")
             continue
         _handle_tweet(tweet)
 

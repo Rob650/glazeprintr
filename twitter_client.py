@@ -367,6 +367,29 @@ def search_keyword_tweets(
         return []
 
 
+def fetch_bot_followers(max_results: int = 500) -> list[dict]:
+    """Fetch the bot's followers. Returns list of {id, username} dicts."""
+    client = get_v2_client()
+    user_id = get_bot_user_id()
+    if not user_id:
+        logger.error("Cannot fetch followers: bot user ID unknown")
+        return []
+    followers = []
+    try:
+        for user in tweepy.Paginator(
+            client.get_users_followers,
+            id=user_id,
+            max_results=1000,
+            user_fields=["username"],
+        ).flatten(limit=max_results):
+            followers.append({"id": str(user.id), "username": user.username})
+        logger.info(f"Fetched {len(followers)} followers")
+        return followers
+    except tweepy.TweepyException as e:
+        logger.error(f"Failed to fetch followers: {e}")
+        return []
+
+
 def fetch_user_tweets(username: str, max_results: int = 20) -> list[dict]:
     """Fetch recent tweets from a user by username. Returns list of tweet dicts."""
     client = get_v2_client()
