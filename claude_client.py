@@ -835,10 +835,12 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
         ticker_note = f"SINGLE TICKER RULE: this tweet is about ${ticker.upper()} only — no other cashtags.\n\n"
     elif roll < 0.75:
         topics = _DUNE_COMPETITOR_TOPICS
-        ticker_note = ""
+        _example = random.choice([t for t in _OTHER_TICKERS if t != "rotus"])
+        ticker_note = f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
     else:
         topics = _PLATFORM_TOPICS
-        ticker_note = ""
+        _example = random.choice([t for t in _OTHER_TICKERS if t != "rotus"])
+        ticker_note = f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
 
     _topic_key, topic_instruction = random.choice(topics)
     user_message += (
