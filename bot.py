@@ -16,7 +16,7 @@ from database import (
 )
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
-    classify_tweet_intent,
+    classify_tweet_intent, pick_original_tweet_topic,
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
@@ -26,8 +26,9 @@ from twitter_client import (
 # from image_generator import (
 #     generate_glaze_score_card, generate_ecosystem_stats_card, remix_tweet_image,
 # )
+import aiohttp
 import memory as mem
-from scraper import scrape_all_data, fetch_token_data_sync
+from scraper import scrape_all_data, fetch_token_data_sync, fetch_dune_context, HEADERS
 
 logger = logging.getLogger(__name__)
 
@@ -419,6 +420,19 @@ def poll_list():
         _handle_tweet(tweet)
 
 
+async def _fetch_dune_ctx() -> str:
+    try:
+        async with aiohttp.ClientSession(headers=HEADERS) as session:
+            return await fetch_dune_context(session)
+    except Exception as e:
+        logger.warning(f"Dune fetch failed: {e}")
+        return ""
+
+
+# Priority order for focus-token fallback: most active / most recognizable tokens
+_FOCUS_TOKEN_FALLBACKS = ["belief", "fatchoi", "ooo", "print", "rotus", "deployr"]
+
+
 async def post_original_tweet():
     global _latest_projects
     if is_paused():
@@ -427,8 +441,12 @@ async def post_original_tweet():
 
     logger.info("Running original tweet job...")
     try:
-        projects = await scrape_all_data()
-        _latest_projects = projects  # cache for score card metric lookups
+        # Scrape market data and Dune context in parallel
+        projects, dune_ctx = await asyncio.gather(
+            scrape_all_data(),
+            _fetch_dune_ctx(),
+        )
+        _latest_projects = projects
 
         for proj in projects:
             if proj.get("contract_address") or proj.get("market_cap"):
@@ -444,18 +462,51 @@ async def post_original_tweet():
                 )
 
         memory_context = mem.get_memory_context()
-        tweet_text = generate_original_tweet(market_data=projects, memory_context=memory_context)
+
+        # Pick topic + determine which token to spotlight
+        topic_key, topic_instruction, focus_token_name = pick_original_tweet_topic(projects)
+        logger.info(f"Original tweet topic: {topic_key}, focus token: {focus_token_name}")
+
+        # Fetch rich DexScreener data for the focus token — try fallbacks until one has data
+        focus_token_data = None
+        candidates = []
+        if focus_token_name:
+            candidates.append(focus_token_name)
+        candidates.extend(t for t in _FOCUS_TOKEN_FALLBACKS if t not in candidates)
+
+        for candidate in candidates[:4]:
+            try:
+                data = fetch_token_data_sync(candidate)
+                if data and (data.get("market_cap") or data.get("price") or data.get("volume")):
+                    focus_token_data = data
+                    logger.info(
+                        f"Focus token resolved: {candidate} "
+                        f"mc={data.get('market_cap')} vol={data.get('volume')} "
+                        f"staking={data.get('staking_pct')}"
+                    )
+                    break
+                logger.info(f"Focus token {candidate!r} returned no usable data — trying next")
+            except Exception as e:
+                logger.warning(f"Focus token lookup failed for {candidate!r}: {e}")
+
+        tweet_text = generate_original_tweet(
+            market_data=projects,
+            memory_context=memory_context,
+            focus_token_data=focus_token_data,
+            dune_context=dune_ctx,
+            topic=(topic_key, topic_instruction),
+        )
 
         img_path = None  # image generation disabled
 
         if DRY_RUN:
-            logger.info(f"[DRY RUN] Original tweet img={'yes' if img_path else 'no'}: {tweet_text}")
+            logger.info(f"[DRY RUN] Original tweet: {tweet_text}")
             record_original_tweet("dry_run", tweet_text, dry_run=True)
         else:
             tweet_id = post_tweet(tweet_text, media_path=img_path)
             if tweet_id:
                 record_original_tweet(tweet_id, tweet_text, dry_run=False)
-                logger.info(f"Posted original tweet {tweet_id} img={'yes' if img_path else 'no'}: {tweet_text[:60]}...")
+                logger.info(f"Posted original tweet {tweet_id}: {tweet_text[:60]}...")
             else:
                 logger.warning("Failed to post original tweet")
     except Exception as e:

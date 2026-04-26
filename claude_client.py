@@ -253,35 +253,34 @@ Rules:
 ORIGINAL_TWEET_PROMPT = """MODE: Original Tweet — you have data, you have opinions, you're going to share both aggressively
 You've seen the numbers. You have context. You're posting with the energy of someone who locked 180 days and watches the fee revenue come in.
 
-⚠️ DATA INTEGRITY — APPLIES WITH FULL FORCE HERE:
-Original tweets are the highest-risk path for fabricated statistics because you might not have live data for every token.
-- You CANNOT cite a staking percentage for any token unless "POBstaked=XX%" appears for that token in the CURRENT MARKET DATA section above
-- You CANNOT compare staking percentages across tokens unless BOTH tokens have explicit POBstaked= values in the data
-- If CURRENT MARKET DATA has no POBstaked= line for a token — you have NO staking data for it, period — do not name it alongside any stat
-- Saying "$ROTUS is at 72% staked" when no POBstaked= value was provided IS A LIE. The bot was caught doing this.
-- If the injected TOPIC FOCUS requires specific token data that isn't in CURRENT MARKET DATA: IGNORE that topic and switch to a data-free topic instead — POB multiplier math, 8-chain infrastructure, competitor dunks, bonding curve mechanics, fee model breakdown. These topics never require specific numbers and always land.
-- NEVER name a token alongside stats you cannot verify. If you don't have the number, don't name the token in a stats context.
+⚠️ VALID DATA SOURCES:
+1. "FOCUS TOKEN DATA" block — when present, THIS IS YOUR HEADLINE. Build the whole tweet around those exact numbers.
+2. "CURRENT MARKET DATA" block — top tokens by MC, biggest movers, volumes. Use any number shown there.
 
-CRITICAL: A TOPIC FOCUS will be injected into the user message. You MUST write about that specific topic/angle. Do NOT default to $BELIEF just because it's the biggest token — the injected topic overrides everything. Each tweet must be about something different.
+⚠️ DATA RULE — REAL NUMBERS OR NOTHING:
+- When FOCUS TOKEN DATA is injected: lead with the most striking number (MC, % change, volume, staking %). DO NOT use vague language when you have exact figures.
+- Only cite staking % if "POBstaked=XX%" appears for that token in the injected data. No POBstaked= line = no staking number, ever.
+- Your training data and memory context are NOT valid sources for specific numbers.
+- NEVER name a token alongside a stat you cannot verify from the injected data blocks.
+- No data for a token? Don't name it in a stats context — pivot to platform mechanics instead.
+
+CRITICAL: A TOPIC FOCUS will be injected. Follow it exactly. Do NOT default to $BELIEF just because it's the biggest — the topic overrides everything.
 
 Rules:
-- FOLLOW THE INJECTED TOPIC FOCUS — this is the specific angle you must use, not a suggestion
-- Lead with the most alarming or exciting data point for that topic — if someone could scroll past this, you failed
-- Use actual numbers ONLY from CURRENT MARKET DATA above — market caps, % changes, volumes
-- STAKING PERCENTAGES: only cite if "POBstaked=XX%" appears for that token in the data above. No POBstaked= line = no staking number, full stop
-- Staking % is content gold WHEN YOU ACTUALLY HAVE IT — example: "$BELIEF has [POBstaked% from data]% in POB staking — that's not a token, that's a lockdown"
-- When you don't have staking data: "conviction building in POB staking", "early adopters are locking in" — never a number
+- FOLLOW THE INJECTED TOPIC FOCUS — this is the specific angle, not a suggestion
+- Lead with the most alarming or exciting data point — if someone could scroll past this, you failed
+- FOCUS TOKEN DATA = your primary ammunition. Use the actual numbers. Show you did the research.
 - Drop real Printr mechanics naturally (POB staking tiers, bonding curve graduation, 8 chains, LayerZero, custom fees)
-- NEVER include any URLs, links, or website addresses. No app.printr.money, no https:// links of any kind. Write "pumpfun" (one word, no dot) when referencing the competitor — never "pump.fun".
-- NEVER start tweets the same way. Every tweet must open differently — different structure, different token, different angle.
-- Tone examples — use these structures. Bracketed values MUST come from CURRENT MARKET DATA; if the data isn't there, use the data-free examples instead:
-  WITH DATA: "while you were sleeping $fatchoi did [+X% from data]. the 180-day POB stakers were already printing."
-  WITH DATA: "$BELIEF sitting at [POBstaked% from data]% locked in POB staking. that's not a token, that's a religion."
+- NEVER include any URLs, links, or website addresses. Write "pumpfun" (one word, no dot) not "pump.fun".
+- NEVER start tweets the same way — every tweet must open differently
+- Tone examples (bracketed values MUST come from injected data blocks):
+  WITH FOCUS DATA: "while you were sleeping $fatchoi did [+X%]. 180-day POB stakers were already printing."
+  WITH FOCUS DATA: "$BELIEF at [MC] MC, [POBstaked%]% locked in POB staking. circulating supply is basically a formality."
+  WITH FOCUS DATA: "[token] doing [vol] in 24h volume at [MC] MC. that's [ratio]x. the market is noticing."
   NO DATA NEEDED: "8 chains. custom bonding curves. 5 fee models. dutch auctions. printr built what the whole space needed and y'all are still on one-trick platforms"
-  NO DATA NEEDED: "lock multiplier math: 180d staker earns 2.5x vs a 7d staker on the same position. the gap compounds. the ngmi are already ngmi."
-  NO DATA NEEDED: "pumpfun gave you one bonding curve and called it a platform. printr gave you 8 chains, 5 fee models, and Dutch auctions. not the same sport."
+  NO DATA NEEDED: "lock multiplier math: 180d staker earns 2.5x vs a 7d staker. the gap compounds. ngmi are already ngmi."
 - Never use hashtags unless they're ecosystem tickers
-- No corporate speak. No "exciting news." No "thrilled to announce." No "we're pleased to share."
+- No corporate speak. No "exciting news." No "thrilled to announce."
 - NEVER mention Virtuals
 - Under 280 chars"""
 
@@ -351,6 +350,107 @@ NEVER mention Virtuals in any score card — Printr is independent.
 Respond with JSON ONLY — no other text:
 If relevant: {"relevant": true, "score": <0-100>, "tier": "<tier label>", "score_card": "<tweet text under 220 chars>"}
 If not relevant: {"relevant": false}"""
+
+_UNDERRATED_TOKENS = ["ooo", "rotus", "deployr", "patapim", "roi", "noob", "cmyk", "pve", "ket", "fsjal", "marmot"]
+
+_TOPIC_FOCUS_TOKENS: dict[str, str | None] = {
+    "belief_staking": "belief",
+    "fatchoi_spotlight": "fatchoi",
+    "underrated_token": None,   # resolved at pick time
+    "staking_leaderboard": None,
+    "biggest_mover": None,      # resolved from market data
+    "platform_mechanics": None,
+    "8_chains": None,
+    "pump_fun_dunk": None,
+    "fee_distribution": None,
+    "anti_vamp": None,
+    "ecosystem_overview": None,
+    "creator_tools": None,
+    "market_comparison": None,
+    "print_token": "print",
+    "conviction_math": None,
+}
+
+
+def pick_original_tweet_topic(market_data: list[dict] | None = None) -> tuple[str, str, str | None]:
+    """Pick a random topic. Returns (key, instruction, focus_token_name | None)."""
+    key, instruction = random.choice(_ORIGINAL_TWEET_TOPICS)
+
+    if key == "underrated_token":
+        token = random.choice(_UNDERRATED_TOKENS)
+        instruction = (
+            f"Spotlight ${token.upper()} specifically — lead with its live stats, momentum, or "
+            f"what the data says about it. Do NOT mention any other ecosystem tokens."
+        )
+        return key, instruction, token
+
+    if key == "biggest_mover" and market_data:
+        movers = sorted(
+            [p for p in market_data if p.get("price_change_24h") is not None],
+            key=lambda p: abs(p["price_change_24h"]),
+            reverse=True,
+        )
+        if movers:
+            return key, instruction, movers[0]["name"]
+
+    focus = _TOPIC_FOCUS_TOKENS.get(key)
+    return key, instruction, focus
+
+
+def _format_token_data_block(token_data: dict, label: str = "LIVE TOKEN DATA") -> str:
+    """Format a token data dict into a prompt section with all available metrics."""
+    import time as _time
+    lines = [f"{label}:"]
+    name = token_data.get("name", "")
+    if name:
+        entry = f"  Token: ${name.upper()}"
+        chain = token_data.get("chain")
+        if chain:
+            entry += f" (on {chain})"
+        lines.append(entry)
+    mc = token_data.get("market_cap")
+    if mc:
+        lines.append(f"  Market cap: ${mc/1e6:.2f}M" if mc >= 1e6 else f"  Market cap: ${mc:,.0f}")
+    price = token_data.get("price")
+    if price:
+        lines.append(f"  Price: ${price:.8f}" if price < 0.01 else f"  Price: ${price:.4f}")
+    chg24 = token_data.get("price_change_24h")
+    if chg24 is not None:
+        lines.append(f"  24h change: {chg24:+.1f}%")
+    chg6 = token_data.get("price_change_6h")
+    if chg6 is not None:
+        lines.append(f"  6h change: {chg6:+.1f}%")
+    chg1 = token_data.get("price_change_1h")
+    if chg1 is not None:
+        lines.append(f"  1h change: {chg1:+.1f}%")
+    vol = token_data.get("volume")
+    if vol:
+        lines.append(f"  24h volume: ${vol/1e6:.2f}M" if vol >= 1e6 else f"  24h volume: ${vol:,.0f}")
+    liq = token_data.get("liquidity")
+    if liq:
+        lines.append(f"  Liquidity: ${liq/1e6:.2f}M" if liq >= 1e6 else f"  Liquidity: ${liq:,.0f}")
+    txns = token_data.get("txns_24h")
+    if txns:
+        buys = token_data.get("buys_24h", 0)
+        sells = token_data.get("sells_24h", 0)
+        lines.append(f"  24h txns: {txns} ({buys} buys / {sells} sells)")
+    holders = token_data.get("holder_count")
+    if holders:
+        lines.append(f"  Holders: {int(holders):,}")
+    staking = token_data.get("staking_pct")
+    if staking is not None:
+        lines.append(f"  POBstaked={staking:.1f}%")
+    created = token_data.get("pair_created_at")
+    if created:
+        age_days = (_time.time() - created / 1000) / 86400 if created > 1e10 else None
+        if age_days is not None:
+            if age_days < 1:
+                lines.append(f"  Token age: {age_days*24:.1f} hours")
+            else:
+                lines.append(f"  Token age: {age_days:.0f} days")
+    lines.append("Use these numbers. Don't be vague when you have exact data.")
+    return "\n".join(lines) + "\n\n"
+
 
 _client = None
 
@@ -504,19 +604,29 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
     return reply, mode
 
 
-def generate_original_tweet(market_data: list[dict] = None, memory_context: str = "") -> str:
+def generate_original_tweet(
+    market_data: list[dict] = None,
+    memory_context: str = "",
+    focus_token_data: dict = None,
+    dune_context: str = "",
+    topic: tuple[str, str] | None = None,
+) -> str:
     system = SYSTEM_PROMPT_BASE + "\n\n" + ORIGINAL_TWEET_PROMPT
 
     user_message = ""
     if memory_context:
         user_message += f"MEMORY CONTEXT:\n{memory_context}\n\n"
 
+    # Dune platform analytics (only if real data rows returned, not just the fallback URL string)
+    if dune_context and "available at" not in dune_context:
+        user_message += f"PRINTR PLATFORM ANALYTICS (on-chain data from Dune):\n{dune_context}\n\n"
+
     if market_data:
         top_mc = sorted(
             [p for p in market_data if p.get("market_cap")],
             key=lambda p: p["market_cap"],
             reverse=True,
-        )[:5]
+        )[:8]
         top_movers = sorted(
             [p for p in market_data if p.get("price_change_24h") is not None],
             key=lambda p: abs(p["price_change_24h"]),
@@ -529,6 +639,7 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
             for p in top_mc:
                 mc = p["market_cap"]
                 chg = p.get("price_change_24h")
+                vol = p.get("volume", 0)
                 line = (
                     f"  ${p['name'].upper()}: MC=${mc / 1e6:.2f}M"
                     if mc >= 1e6
@@ -536,6 +647,8 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
                 )
                 if chg is not None:
                     line += f" ({chg:+.1f}%24h)"
+                if vol:
+                    line += f" vol=${vol/1e6:.2f}M" if vol >= 1e6 else f" vol=${vol:,.0f}"
                 staking_pct = p.get("staking_pct")
                 if staking_pct is not None:
                     line += f" POBstaked={staking_pct:.0f}%"
@@ -544,28 +657,47 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
             data_lines.append("Biggest movers (24h):")
             for p in top_movers:
                 mc = p.get("market_cap", 0)
+                vol = p.get("volume", 0)
                 line = f"  ${p['name'].upper()}: {p['price_change_24h']:+.1f}%"
                 if mc:
-                    line += (
-                        f" MC=${mc / 1e6:.2f}M" if mc >= 1e6 else f" MC=${mc:,.0f}"
-                    )
+                    line += f" MC=${mc / 1e6:.2f}M" if mc >= 1e6 else f" MC=${mc:,.0f}"
+                if vol:
+                    line += f" vol=${vol/1e6:.2f}M" if vol >= 1e6 else f" vol=${vol:,.0f}"
                 staking_pct = p.get("staking_pct")
                 if staking_pct is not None:
                     line += f" POBstaked={staking_pct:.0f}%"
                 data_lines.append(line)
         user_message += "\n".join(data_lines) + "\n\n"
 
+    # Focus token — detailed data block that should drive the tweet
+    if focus_token_data:
+        user_message += _format_token_data_block(
+            focus_token_data,
+            label="FOCUS TOKEN DATA — these are real live numbers, lead with them",
+        )
+
     banned = get_recent_openers()
     if banned:
         user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
 
-    _topic_key, topic_instruction = random.choice(_ORIGINAL_TWEET_TOPICS)
-    user_message += (
-        f"TOPIC FOCUS FOR THIS TWEET: {topic_instruction}\n"
-        "Do NOT default to $BELIEF unless the topic explicitly requires it.\n\n"
-        "Generate an original tweet following the TOPIC FOCUS above. "
-        "Reply ONLY with the tweet text, no quotes, no explanation."
-    )
+    if topic:
+        _topic_key, topic_instruction = topic
+    else:
+        _topic_key, topic_instruction = random.choice(_ORIGINAL_TWEET_TOPICS)
+
+    if focus_token_data:
+        user_message += (
+            f"TOPIC FOCUS FOR THIS TWEET: {topic_instruction}\n"
+            "You have REAL live data in FOCUS TOKEN DATA above — those numbers are your headline. "
+            "Build the tweet around them. Be specific. Show you did the research.\n\n"
+            "Generate an original tweet. Reply ONLY with the tweet text, no quotes, no explanation."
+        )
+    else:
+        user_message += (
+            f"TOPIC FOCUS FOR THIS TWEET: {topic_instruction}\n"
+            "Do NOT default to $BELIEF unless the topic explicitly requires it.\n\n"
+            "Generate an original tweet. Reply ONLY with the tweet text, no quotes, no explanation."
+        )
 
     tweet = _call_claude(system, user_message, max_tokens=200)
     if len(tweet) > 280:
