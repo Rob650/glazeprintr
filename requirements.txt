@@ -5,3 +5,4 @@ anthropic==0.40.0
 apscheduler==3.10.4
 aiohttp==3.11.10
 Pillow>=10.0.0
+cloudscraper>=1.2.71

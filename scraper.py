@@ -52,8 +52,10 @@ HEADERS = {
 
 # Known contract addresses to always track via DexScreener even if the printr.money API is down.
 KNOWN_CONTRACTS: dict[str, str] = {
-    # "belief": "SOLANA_ADDRESS_HERE",
-    # "fatchoi": "SOLANA_ADDRESS_HERE",
+    "belief": "29CWsqH84TykHDDwA6DtETUtXQPuKbVgKCmxtkBsbrrr",
+    "rotus": "C8Lwj83fBz9bPKSUxNLEc2QkLF7oVkV7Ja9UKSFLbrrr",
+    "deployr": "8JvDVZK6CHFhwwBUgZcEy18i1xXQzAHfimYarmoobrrr",
+    "fatchoi": "2smh2bkJ2ZRAGhrLSNxgkwPGkptf5BYsfdoWkSmEbrrr",
 }
 
 # Key tokens to attempt per-token staking fetch if bulk staking endpoint fails
@@ -151,7 +153,54 @@ async def _fetch_dexscreener(session: aiohttp.ClientSession, contract_address: s
     return {}
 
 
+async def _try_printr_cloudscraper() -> list[dict]:
+    """Try Printr endpoints with cloudscraper to bypass Cloudflare IUAM challenge."""
+    loop = asyncio.get_running_loop()
+
+    def _sync_fetch():
+        try:
+            import cloudscraper  # type: ignore
+        except ImportError:
+            logger.debug("cloudscraper not installed")
+            return []
+
+        scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
+        for endpoint in PRINTR_ENDPOINTS:
+            try:
+                resp = scraper.get(endpoint, timeout=20)
+                if resp.status_code == 200:
+                    try:
+                        data = resp.json()
+                    except Exception:
+                        logger.debug(f"cloudscraper: {endpoint} not JSON")
+                        continue
+                    tokens = (
+                        data if isinstance(data, list)
+                        else (
+                            data.get("tokens") or data.get("data")
+                            or data.get("results") or data.get("items") or []
+                        )
+                    )
+                    if tokens:
+                        logger.info(f"cloudscraper: {len(tokens)} tokens from {endpoint}")
+                        return tokens
+                    logger.debug(f"cloudscraper: {endpoint} → 200 but no tokens")
+                elif resp.status_code in (401, 403):
+                    logger.debug(f"cloudscraper: {endpoint} → {resp.status_code}, skipping")
+            except Exception as e:
+                logger.debug(f"cloudscraper: {endpoint} error: {e}")
+        return []
+
+    return await loop.run_in_executor(None, _sync_fetch)
+
+
 async def _try_printr_api(session: aiohttp.ClientSession) -> list[dict]:
+    tokens = await _try_printr_cloudscraper()
+    if tokens:
+        return tokens
+
     for endpoint in PRINTR_ENDPOINTS:
         for attempt in range(2):
             try:
