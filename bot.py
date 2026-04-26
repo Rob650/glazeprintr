@@ -753,13 +753,16 @@ def poll_qt_glazer_list():
     except Exception as e:
         logger.warning(f"QT token lookup failed for {tweet_id}: {e}")
 
+    thread_context = _get_thread_context(best_tweet)
+
     try:
-        quote_text, _ = generate_quote_tweet(
+        quote_text, meme_path = generate_quote_tweet(
             tweet_text,
             author_handle,
             token_data=token_data,
             ecosystem_comparative=_latest_comparative_context,
             dune_context=_latest_dune_context,
+            thread_context=thread_context,
         )
     except Exception as e:
         logger.error(f"QT Claude error for {tweet_id}: {e}")
@@ -769,7 +772,7 @@ def poll_qt_glazer_list():
     if DRY_RUN:
         logger.info(f"[DRY RUN] QT Glazer @{author_handle} score={best_score}: {quote_text[:80]}...")
     else:
-        qt_tweet_id = post_quote_tweet(quote_text, tweet_id, author_handle=author_handle)
+        qt_tweet_id = post_quote_tweet(quote_text, tweet_id, author_handle=author_handle, media_path=meme_path)
         if qt_tweet_id == QUOTE_TWEET_FORBIDDEN:
             logger.warning(f"QT forbidden for {tweet_id}: Twitter rejected quote — skipping")
             return
