@@ -302,6 +302,43 @@ def fetch_list_tweets(list_id: str) -> list[dict]:
         return []
 
 
+def fetch_user_tweets(username: str, max_results: int = 20) -> list[dict]:
+    """Fetch recent tweets from a user by username. Returns list of tweet dicts."""
+    client = get_v2_client()
+    try:
+        user_resp = client.get_user(username=username, user_fields=["id", "name"])
+        if not user_resp.data:
+            logger.warning(f"User @{username} not found")
+            return []
+        user_id = user_resp.data.id
+
+        resp = client.get_users_tweets(
+            id=user_id,
+            max_results=max_results,
+            tweet_fields=["created_at", "text", "public_metrics"],
+            exclude=["retweets", "replies"],
+        )
+        if not resp.data:
+            return []
+
+        tweets = []
+        for t in resp.data:
+            metrics = getattr(t, "public_metrics", {}) or {}
+            tweets.append({
+                "id": str(t.id),
+                "text": t.text,
+                "author_handle": username,
+                "created_at": str(t.created_at) if t.created_at else "",
+                "likes": metrics.get("like_count", 0),
+                "retweets": metrics.get("retweet_count", 0),
+            })
+        logger.info(f"Fetched {len(tweets)} tweets from @{username}")
+        return tweets
+    except tweepy.TweepyException as e:
+        logger.error(f"Failed to fetch tweets for @{username}: {e}")
+        return []
+
+
 def fetch_tweet_chain(tweet_id: str, max_depth: int = 5) -> list[dict]:
     """Fetch the chain of parent tweets up to max_depth levels, returning oldest first."""
     client = get_v2_client()

@@ -13,6 +13,7 @@ from database import (
     get_mentions_since_id, set_mentions_since_id,
     get_list_since_id, set_list_since_id,
     try_claim_mention, try_claim_reply,
+    store_ecosystem_tweet, get_ecosystem_context_age_hours,
 )
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
@@ -20,7 +21,7 @@ from claude_client import (
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
-    fetch_tweet_chain,
+    fetch_tweet_chain, fetch_user_tweets,
 )
 # image generation disabled
 # from image_generator import (
@@ -417,6 +418,37 @@ def poll_list():
             logger.debug(f"List tweet {tweet['id']} already claimed — skip")
             continue
         _handle_tweet(tweet)
+
+
+ECOSYSTEM_ACCOUNTS = ["printr", "masterprintr"]
+ECOSYSTEM_REFRESH_INTERVAL_HOURS = 6
+
+
+def refresh_ecosystem_context():
+    """Fetch recent tweets from @printr and @masterprintr and store in DB."""
+    age = get_ecosystem_context_age_hours()
+    if age is not None and age < ECOSYSTEM_REFRESH_INTERVAL_HOURS:
+        logger.info(f"Ecosystem context is {age:.1f}h old — skipping refresh (interval={ECOSYSTEM_REFRESH_INTERVAL_HOURS}h)")
+        return
+
+    logger.info("Refreshing ecosystem context from @printr and @masterprintr...")
+    total_stored = 0
+    for handle in ECOSYSTEM_ACCOUNTS:
+        try:
+            tweets = fetch_user_tweets(handle, max_results=20)
+            for t in tweets:
+                store_ecosystem_tweet(
+                    tweet_id=t["id"],
+                    author_handle=t["author_handle"],
+                    text=t["text"],
+                    tweet_created_at=t["created_at"],
+                    likes=t.get("likes", 0),
+                    retweets=t.get("retweets", 0),
+                )
+            total_stored += len(tweets)
+        except Exception as e:
+            logger.error(f"Ecosystem context refresh failed for @{handle}: {e}")
+    logger.info(f"Ecosystem context refreshed — stored {total_stored} tweets total")
 
 
 async def post_original_tweet():

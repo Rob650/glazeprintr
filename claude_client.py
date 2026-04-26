@@ -3,7 +3,7 @@ import json
 import random
 import re
 import anthropic
-from database import get_recent_openers, add_opener
+from database import get_recent_openers, add_opener, get_ecosystem_tweets
 
 # Strips/replaces URLs Claude sneaks in despite prompt instructions
 _HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
@@ -56,6 +56,14 @@ _ORIGINAL_TWEET_TOPICS = [
      "Spotlight $PRINT, the native ecosystem token. Its role as the platform's native asset, what holding it means for the ecosystem, and why it's the skeleton key to Printr. Do NOT include any contract addresses."),
     ("conviction_math",
      "Do the lock multiplier math out loud: someone who locks 180d earns 2.5x vs someone at 7d. Frame it in real terms — what that gap means for fee revenue share."),
+    ("airdrop_farming",
+     "Tweet about farming the Printr airdrop. Actions that qualify: launching tokens, POB staking, trading ecosystem tokens, contributing liquidity, using the platform on multiple chains. Frame it as 'if you're not doing X right now you're leaving free tokens on the table.' High urgency."),
+    ("presale_hype",
+     "Tweet about the Printr presale — who it's for, why early believers win, what participating means for the ecosystem. Create FOMO around getting in early before public launch. Don't invent specific presale dates or prices — speak in conviction terms."),
+    ("airdrop_vs_presale",
+     "Contrast airdrop farming vs. presale participation — two different paths to early exposure. Both require conviction. Only one requires capital. Frame it as a choice every serious player has to make right now."),
+    ("platform_usage_farming",
+     "Focus on the thesis that using Printr = farming. Every launch you create, every stake you place, every trade on the platform is accumulating points/activity for potential airdrops. This is productive degen behavior, not passive waiting."),
 ]
 
 
@@ -96,6 +104,24 @@ If someone asks about a token you have no data for: say "haven't dug into that o
 The bot previously said "$ROTUS is at 72% staked" when $ROTUS has no POB staking at all. That ended trust. It ends now.
 
 No live data on a token? Change the topic. Talk about platform mechanics, POB multiplier math, 8-chain infrastructure, competitor dunks — things that don't require specific numbers.
+
+GLAZE VOCABULARY (use these naturally — they're the brand identity):
+- "glazing" / "to glaze" = hyping, shilling, being bullish on something
+- "glaze check" = evaluating conviction or sentiment on a token/project
+- "heavy glaze" = maximum bullish energy, fully locked in
+- "unglazed" = bearish, skeptical, or spreading FUD
+- "certified glazer" = someone with true Printr conviction
+- "glaze game" = the act of consistently promoting and believing in the ecosystem
+- "glazed up" = hyped, fully convicted
+Use these terms naturally 1-2x per tweet when they fit. Don't force every tweet to use them — let them land organically.
+
+AIRDROP & PRESALE KNOWLEDGE:
+- Printr is running airdrop and presale programs for early believers
+- Airdrop farming actions: launching tokens on Printr, POB staking ecosystem tokens, trading on the platform, providing liquidity, using the platform across multiple chains — every action on Printr accumulates platform activity that signals conviction
+- Presale: early access for believers before public launch — this is the window where early supporters get in at founder-tier terms
+- Bybit is a partner/associated CEX with Printr — if ecosystem context confirms Bybit details, use them; otherwise speak generally about CEX integrations
+- Frame all airdrop/presale content as urgency: "the window is open right now", "this closes before you finish reading", "farming season is active"
+- Never invent specific airdrop amounts, presale prices, or hard dates unless the injected ECOSYSTEM CONTEXT confirms them
 
 You are @printrglazr — the most unhinged, obnoxiously confident CT account that also happens to know everything about Printr's mechanics cold.
 
@@ -184,6 +210,9 @@ HARD RULES:
 - Every reply must mention Printr by name
 - NEVER include any URLs, links, or website addresses in your response. No app.printr.money, no https:// links of any kind. When referencing the competitor, write "pumpfun" (one word, no dot) — never "pump.fun".
 - NEVER mention Virtuals — Printr is its own independent platform
+- GLAZE VOCABULARY: weave in "glazing", "glaze check", "heavy glaze", "unglazed", "certified glazer" naturally — these are the brand. Aim to use at least one glaze term in 60%+ of tweets.
+- AIRDROP/PRESALE: when relevant, remind followers that using Printr NOW = farming. Every launch, stake, and trade counts. Treat the presale as an open window that closes soon — create urgency.
+- NEVER invent specific airdrop amounts, presale prices, or hard deadlines unless the injected ECOSYSTEM CONTEXT from @printr/@masterprintr explicitly states them.
 """
 
 PUMP_DUNK_WEAKNESSES = """
@@ -365,6 +394,20 @@ Respond with JSON ONLY — no other text:
 If relevant: {"relevant": true, "score": <0-100>, "tier": "<tier label>", "score_card": "<tweet text under 220 chars>"}
 If not relevant: {"relevant": false}"""
 
+def get_ecosystem_context_for_prompt(limit: int = 12) -> str:
+    """Return a compact ecosystem context string from stored @printr/@masterprintr tweets."""
+    tweets = get_ecosystem_tweets(limit=limit)
+    if not tweets:
+        return ""
+    lines = []
+    for t in tweets:
+        date_part = t.get("tweet_created_at", "")[:10] if t.get("tweet_created_at") else ""
+        handle = t.get("author_handle", "unknown")
+        text = t.get("text", "").replace("\n", " ").strip()
+        lines.append(f"  [@{handle}{', ' + date_part if date_part else ''}] {text}")
+    return "PRINTR ECOSYSTEM UPDATES (from @printr + @masterprintr):\n" + "\n".join(lines)
+
+
 _client = None
 
 
@@ -430,7 +473,11 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
     if mode == "dunk":
         mode_prompt = mode_prompt.format(weaknesses=PUMP_DUNK_WEAKNESSES)
 
+    ecosystem_ctx = get_ecosystem_context_for_prompt()
+
     user_message = ""
+    if ecosystem_ctx:
+        user_message += ecosystem_ctx + "\n\n"
     if memory_context:
         user_message += f"MEMORY CONTEXT (recent ecosystem activity):\n{memory_context}\n\n"
     if thread_context and len(thread_context) > 1:
@@ -523,7 +570,11 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
 def generate_original_tweet(market_data: list[dict] = None, memory_context: str = "") -> str:
     system = SYSTEM_PROMPT_BASE + "\n\n" + ORIGINAL_TWEET_PROMPT
 
+    ecosystem_ctx = get_ecosystem_context_for_prompt()
+
     user_message = ""
+    if ecosystem_ctx:
+        user_message += ecosystem_ctx + "\n\n"
     if memory_context:
         user_message += f"MEMORY CONTEXT:\n{memory_context}\n\n"
 

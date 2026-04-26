@@ -39,6 +39,21 @@ def init_db():
         except Exception:
             pass  # Column already exists
 
+        # Migrate: add ecosystem_tweets table if missing
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS ecosystem_tweets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tweet_id TEXT UNIQUE,
+                author_handle TEXT,
+                text TEXT,
+                tweet_created_at TEXT,
+                likes INTEGER DEFAULT 0,
+                retweets INTEGER DEFAULT 0,
+                fetched_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
+        conn.commit()
+
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS replied_tweets (
                 tweet_id TEXT PRIMARY KEY,
@@ -461,3 +476,45 @@ def add_opener(word: str, keep: int = 8):
     if len(openers) > keep:
         openers = openers[-keep:]
     set_state("recent_openers", json.dumps(openers))
+
+
+# --- ecosystem_tweets (context from @printr and @masterprintr) ---
+
+def store_ecosystem_tweet(tweet_id: str, author_handle: str, text: str,
+                          tweet_created_at: str, likes: int = 0, retweets: int = 0):
+    with db() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO ecosystem_tweets
+               (tweet_id, author_handle, text, tweet_created_at, likes, retweets)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (tweet_id, author_handle, text, tweet_created_at, likes, retweets)
+        )
+
+
+def get_ecosystem_tweets(limit: int = 40) -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT tweet_id, author_handle, text, tweet_created_at, likes, retweets, fetched_at
+               FROM ecosystem_tweets
+               ORDER BY fetched_at DESC, tweet_created_at DESC
+               LIMIT ?""",
+            (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_ecosystem_context_age_hours() -> float | None:
+    """Returns how many hours ago ecosystem tweets were last fetched, or None if never."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT fetched_at FROM ecosystem_tweets ORDER BY fetched_at DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            fetched = datetime.fromisoformat(row["fetched_at"])
+            if fetched.tzinfo is None:
+                fetched = fetched.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - fetched).total_seconds() / 3600
+        except (ValueError, TypeError):
+            return None
