@@ -461,9 +461,11 @@ def poll_keyword_search():
         _keyword_search_since_id_loaded = True
 
     query = _build_keyword_query()
-    # Always enforce a 5-minute window as a hard safety net — even if since_id is reset,
-    # we never process tweets older than one polling interval.
-    start_time = datetime.now(timezone.utc) - timedelta(minutes=_KEYWORD_SEARCH_WINDOW_MINUTES)
+    # Twitter v2 doesn't allow since_id AND start_time together. Use since_id when available
+    # (it already provides recency guarantee); fall back to start_time on fresh DB.
+    start_time = None if _keyword_search_since_id else (
+        datetime.now(timezone.utc) - timedelta(minutes=_KEYWORD_SEARCH_WINDOW_MINUTES)
+    )
 
     logger.info(f"Polling keyword search since_id={_keyword_search_since_id} query={query[:80]}...")
     tweets = search_keyword_tweets(query, since_id=_keyword_search_since_id, start_time=start_time)
@@ -476,11 +478,10 @@ def poll_keyword_search():
     set_keyword_search_since_id(_keyword_search_since_id)
 
     for tweet in tweets:
-        rs = tweet.get("reply_settings", "MISSING")
-        logger.info(f"Keyword tweet {tweet['id']} @{tweet.get('author_handle')} reply_settings={rs}: {tweet.get('text','')[:60]}")
+        rs = tweet.get("reply_settings", "everyone")
         # Skip tweets with restricted reply settings — we'd get a 403 immediately.
         if rs != "everyone":
-            logger.info(f"SKIPPING keyword tweet {tweet['id']} — reply_settings={rs}")
+            logger.debug(f"SKIPPING keyword tweet {tweet['id']} — reply_settings={rs}")
             continue
         if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
             logger.debug(f"Keyword tweet {tweet['id']} already claimed — skip")
