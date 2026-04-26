@@ -344,7 +344,7 @@ def score_tweet(tweet: dict, thread_context: list[dict] | None = None) -> bool:
         )
         record_score(tweet_id, author_handle, score, tier, score_card, None, dry_run=True)
     else:
-        quote_id = post_quote_tweet(score_card, tweet_id, media_path=img_path)
+        quote_id = post_quote_tweet(score_card, tweet_id, author_handle=author_handle, media_path=img_path)
         if not quote_id:
             logger.warning(f"Failed to post glaze score for @{author_handle} ({tweet_id})")
             return False
@@ -745,7 +745,7 @@ def poll_qt_glazer_list():
         logger.warning(f"QT token lookup failed for {tweet_id}: {e}")
 
     try:
-        quote_text, meme_path = generate_quote_tweet(
+        quote_text, _ = generate_quote_tweet(
             tweet_text,
             author_handle,
             token_data=token_data,
@@ -759,22 +759,16 @@ def poll_qt_glazer_list():
 
     qt_tweet_id = None
     if DRY_RUN:
-        logger.info(
-            f"[DRY RUN] QT Glazer @{author_handle} score={best_score} "
-            f"meme={'yes' if meme_path else 'no'}: {quote_text[:80]}..."
-        )
+        logger.info(f"[DRY RUN] QT Glazer @{author_handle} score={best_score}: {quote_text[:80]}...")
     else:
-        qt_tweet_id = post_quote_tweet(quote_text, tweet_id, media_path=meme_path)
+        qt_tweet_id = post_quote_tweet(quote_text, tweet_id, author_handle=author_handle)
         if qt_tweet_id == QUOTE_TWEET_FORBIDDEN:
             logger.warning(f"QT forbidden for {tweet_id}: Twitter rejected quote — skipping")
             return
         if not qt_tweet_id:
             logger.warning(f"QT post failed for {tweet_id}")
             return
-        logger.info(
-            f"QT Glazer posted: {qt_tweet_id} score={best_score} "
-            f"meme={'yes' if meme_path else 'no'} — {quote_text[:60]}..."
-        )
+        logger.info(f"QT Glazer posted: {qt_tweet_id} score={best_score} — {quote_text[:60]}...")
 
     record_quote_tweet(
         tweet_id=tweet_id,

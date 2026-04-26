@@ -13,8 +13,8 @@ from patterns import (
     get_pattern_context, get_reply_pattern_context, get_qt_pattern_context,
 )
 
-# Strips/replaces URLs Claude sneaks in despite prompt instructions
-_HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+# Strips/replaces URLs Claude sneaks in despite prompt instructions (twitter.com/x.com are preserved)
+_HTTPS_RE = re.compile(r'https?://(?!(?:www\.)?(?:twitter\.com|x\.com)/)\S+', re.IGNORECASE)
 _TWITTER_URL_RE = re.compile(r'\b(?:twitter\.com|x\.com)/\S*', re.IGNORECASE)
 _BARE_TCO_RE = re.compile(r'\bt\.co/\S+', re.IGNORECASE)
 _PUMP_FUN_RE = re.compile(r'\bpump\.fun\S*', re.IGNORECASE)
@@ -202,9 +202,8 @@ def _pick_meme(ticker: str | None) -> str | None:
 
 
 def _clean_reply(text: str) -> str:
-    """Strip URLs, contract addresses, and normalize whitespace."""
+    """Strip non-Twitter URLs, contract addresses, and normalize whitespace."""
     text = _HTTPS_RE.sub('', text)
-    text = _TWITTER_URL_RE.sub('', text)
     text = _BARE_TCO_RE.sub('', text)
     text = _PUMP_FUN_RE.sub('pumpfun', text)
     text = _PRINTR_MONEY_RE.sub('Printr', text)

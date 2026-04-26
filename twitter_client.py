@@ -19,7 +19,7 @@ if _missing:
         ", ".join(_missing),
     )
 
-_HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+_HTTPS_RE = re.compile(r'https?://(?!(?:www\.)?(?:twitter\.com|x\.com)/)\S+', re.IGNORECASE)
 _TWITTER_URL_RE = re.compile(r'\b(?:twitter\.com|x\.com)/\S*', re.IGNORECASE)
 _BARE_TCO_RE = re.compile(r'\bt\.co/\S+', re.IGNORECASE)
 _PUMP_FUN_RE = re.compile(r'\bpump\.fun\S*', re.IGNORECASE)
@@ -154,9 +154,8 @@ def fetch_mentions(since_id: str | None = None) -> list[dict]:
 
 
 def _clean_tweet(text: str) -> str:
-    """Strip URLs, normalize whitespace, ensure ends with \\n\\n🙏, truncate to 280 chars."""
+    """Strip non-Twitter URLs, normalize whitespace, ensure ends with \\n\\n🙏, truncate to 280 chars."""
     text = _HTTPS_RE.sub('', text)
-    text = _TWITTER_URL_RE.sub('', text)
     text = _BARE_TCO_RE.sub('', text)
     text = _PUMP_FUN_RE.sub('pumpfun', text)
     text = _PRINTR_MONEY_RE.sub('Printr', text)
@@ -165,6 +164,17 @@ def _clean_tweet(text: str) -> str:
     if not text.rstrip().endswith('🙏'):
         text = text.rstrip() + '\n\n🙏'
     return text[:280]
+
+
+def _clean_qt_body(text: str, url_suffix: str) -> str:
+    """Clean QT post body, leaving room for the tweet URL suffix. Does not add 🙏."""
+    text = _HTTPS_RE.sub('', text)
+    text = _BARE_TCO_RE.sub('', text)
+    text = _PUMP_FUN_RE.sub('pumpfun', text)
+    text = _PRINTR_MONEY_RE.sub('Printr', text)
+    text = re.sub(r'[ \t]+', ' ', text).strip()
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text[:280 - len(url_suffix)]
 
 
 def _log_post_error(action: str, e: tweepy.TweepyException) -> None:
@@ -235,30 +245,30 @@ def post_tweet(text: str, media_path: str | None = None) -> str | None:
 QUOTE_TWEET_FORBIDDEN = "QUOTE_TWEET_FORBIDDEN"
 
 
-def post_quote_tweet(text: str, quote_tweet_id: str, media_path: str | None = None) -> str | None:
+def post_quote_tweet(
+    text: str,
+    quote_tweet_id: str,
+    author_handle: str | None = None,
+    media_path: str | None = None,
+) -> str | None:
+    """Post a new tweet with the quoted tweet's URL appended so Twitter auto-embeds it as a QT card."""
     client = get_v2_client()
-    clean = _clean_tweet(text)
+    if author_handle:
+        tweet_url = f"https://x.com/{author_handle}/status/{quote_tweet_id}"
+    else:
+        tweet_url = f"https://x.com/i/web/status/{quote_tweet_id}"
+    url_suffix = f"\n\n{tweet_url}"
+    full_text = _clean_qt_body(text, url_suffix) + url_suffix
     media_kwargs, media_ok = _media_kwargs(media_path)
     try:
-        response = client.create_tweet(text=clean, quote_tweet_id=quote_tweet_id, **media_kwargs)
+        response = client.create_tweet(text=full_text, **media_kwargs)
         tweet_id = response.data["id"]
         media_status = "uploaded" if media_ok else ("upload_failed" if media_path else "no_media")
-        logger.info(f"Posted quote tweet {tweet_id} (media={media_status}): {clean[:60]}...")
+        logger.info(f"Posted quote tweet {tweet_id} (media={media_status}): {full_text[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
         logger.error(f"post_quote_tweet failed quoting tweet_id={quote_tweet_id}")
         _log_post_error("Failed to post quote tweet", e)
-        resp = getattr(e, "response", None)
-        status = getattr(resp, "status_code", None)
-        if status == 403:
-            try:
-                body = resp.json() if resp else {}
-            except Exception:
-                body = {}
-            # Detect specific "quote not allowed" restriction on the target tweet
-            error_text = str(e) + str(body)
-            if "Quoting this post is not allowed" in error_text:
-                return QUOTE_TWEET_FORBIDDEN
         return None
 
 
