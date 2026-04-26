@@ -3,7 +3,9 @@ import json
 import random
 import re
 import anthropic
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import get_recent_openers, add_opener, get_ecosystem_tweets, get_last_ticker, set_last_ticker
+from scraper import _fetch_url_sync, DEXSCREENER_SEARCH_API
 
 # Strips/replaces URLs Claude sneaks in despite prompt instructions
 _HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
@@ -41,6 +43,43 @@ _FATCHOI_TOPICS = [
 
 # ── 30 %: other-ticker spotlights — 9 tokens rotated evenly ─────────────────
 _OTHER_TICKERS = ["ooo", "patapim", "rotus", "roi", "cmyk", "print", "pve", "belief", "deployr", "brrr", "quack", "lfp", "stakr", "pob500", "fsjal"]
+
+
+def _fetch_ticker_change(ticker: str) -> tuple[str, float]:
+    try:
+        data = _fetch_url_sync(DEXSCREENER_SEARCH_API.format(ticker.upper()), timeout=5)
+        pairs = (data or {}).get("pairs") or []
+        if pairs:
+            pairs.sort(key=lambda p: float((p.get("liquidity") or {}).get("usd") or 0), reverse=True)
+            return ticker, float((pairs[0].get("priceChange") or {}).get("h24") or 0)
+    except Exception:
+        pass
+    return ticker, 0.0
+
+
+def _pick_ticker_by_momentum(available: list[str]) -> str:
+    """Pick a ticker weighted toward the biggest 24h gainers. Falls back to random on failure."""
+    try:
+        with ThreadPoolExecutor(max_workers=min(8, len(available))) as ex:
+            futures = {ex.submit(_fetch_ticker_change, t): t for t in available}
+            changes: list[tuple[str, float]] = []
+            for fut in as_completed(futures, timeout=10):
+                try:
+                    changes.append(fut.result())
+                except Exception:
+                    changes.append((futures[fut], 0.0))
+    except Exception:
+        return random.choice(available)
+
+    if not changes:
+        return random.choice(available)
+
+    # Sort biggest gainers first; rank-based weights so rank 0 is n× more likely than rank n-1
+    changes.sort(key=lambda x: x[1], reverse=True)
+    n = len(changes)
+    weights = [n - i for i in range(n)]
+    return random.choices([t for t, _ in changes], weights=weights, k=1)[0]
+
 
 # ── 25 %: Dune data / competitor comparisons ─────────────────────────────────
 _DUNE_COMPETITOR_TOPICS = [
@@ -864,7 +903,7 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     elif roll < 0.50:
         # Also catches the FATCHOI redirect (roll < 0.20 but fatchoi was last used)
         available = [t for t in _OTHER_TICKERS if t != last_ticker]
-        ticker = random.choice(available or _OTHER_TICKERS)
+        ticker = _pick_ticker_by_momentum(available or _OTHER_TICKERS)
         meme_angles = (
             "grindset, price shock, holder psychology, community callout, "
             "philosophical conviction, absurdist humor, or pure price action"
