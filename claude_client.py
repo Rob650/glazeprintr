@@ -40,7 +40,7 @@ _FATCHOI_TOPICS = [
 ]
 
 # ── 30 %: other-ticker spotlights — 9 tokens rotated evenly ─────────────────
-_OTHER_TICKERS = ["ooo", "patapim", "rotus", "roi", "cmyk", "print", "pve", "belief", "deployr", "brrr", "quack", "lfp"]
+_OTHER_TICKERS = ["ooo", "patapim", "rotus", "roi", "cmyk", "print", "pve", "belief", "deployr", "brrr", "quack", "lfp", "stakr"]
 
 # ── 25 %: Dune data / competitor comparisons ─────────────────────────────────
 _DUNE_COMPETITOR_TOPICS = [
