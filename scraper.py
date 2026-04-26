@@ -55,7 +55,7 @@ KNOWN_CONTRACTS: dict[str, str] = {
     "belief": "29CWsqH84TykHDDwA6DtETUtXQPuKbVgKCmxtkBsbrrr",
     "rotus": "C8Lwj83fBz9bPKSUxNLEc2QkLF7oVkV7Ja9UKSFLbrrr",
     "deployr": "8JvDVZK6CHFhwwBUgZcEy18i1xXQzAHfimYarmoobrrr",
-    "fatchoi": "2smh2bkJ2ZRAGhrLSNxgkwPGkptf5BYsfdoWkSmEbrrr",
+    "fatchoi": "57dYAUq7Y4hiCSdAB7iBDg4gcYFq7HeUaEs3XnNkbrrr",
 }
 
 # Key tokens to attempt per-token staking fetch if bulk staking endpoint fails
