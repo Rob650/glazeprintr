@@ -162,6 +162,15 @@ def _clean_tweet(text: str) -> str:
 
 
 def _log_post_error(action: str, e: tweepy.TweepyException) -> None:
+    status = getattr(getattr(e, "response", None), "status_code", None)
+    if status == 402:
+        logger.error(
+            f"{action}: 402 Payment Required — ACTION REQUIRED: check Twitter Developer Portal "
+            f"(developer.twitter.com). Possible causes: (1) API subscription plan expired or "
+            f"insufficient tier, (2) monthly write quota exhausted, (3) OAuth tokens generated "
+            f"before write permissions were enabled (regenerate tokens after enabling Read+Write)."
+        )
+        return
     codes = getattr(e, "api_codes", [])
     msgs = getattr(e, "api_messages", [])
     if codes or msgs:
@@ -439,7 +448,7 @@ def fetch_tweet_chain(tweet_id: str, max_depth: int = 5) -> list[dict]:
                 break
 
         except tweepy.TweepyException as e:
-            logger.error(f"Failed to fetch tweet {current_id}: {e}")
+            _log_post_error(f"Failed to fetch tweet {current_id}", e)
             break
 
     return list(reversed(chain))

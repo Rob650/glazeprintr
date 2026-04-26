@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -29,12 +30,13 @@ async def lifespan(app: FastAPI):
     # max_instances=1: never run two copies of the same poller concurrently.
     # coalesce=True: if a run was delayed/missed, fire once and skip the backlog.
     # misfire_grace_time=60: tolerate up to 60 s of scheduler lag before skipping a run.
+    _now = datetime.now(timezone.utc)
     scheduler.add_job(bot.poll_list, "interval", minutes=5, id="list_poller", replace_existing=True,
-                      max_instances=1, coalesce=True, misfire_grace_time=60)
+                      max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.poll_mentions, "interval", minutes=5, id="mentions_poller", replace_existing=True,
-                      max_instances=1, coalesce=True, misfire_grace_time=60)
+                      max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.poll_keyword_search, "interval", minutes=5, id="keyword_searcher", replace_existing=True,
-                      max_instances=1, coalesce=True, misfire_grace_time=60)
+                      max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.post_original_tweet, "interval", minutes=10, id="original_tweeter", replace_existing=True)
     scheduler.add_job(bot.refresh_ecosystem_context, "interval", hours=6, id="ecosystem_refresher", replace_existing=True)
     scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True)
