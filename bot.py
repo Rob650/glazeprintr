@@ -85,7 +85,6 @@ _QT_GLAZER_WINDOW_MINUTES = 20  # wider window for 10-min poll interval
 
 _qt_glazer_since_id: str | None = None
 _qt_glazer_since_id_loaded: bool = False
-_qt_quote_forbidden_authors: set[str] = set()  # authors whose tweets always get 403 quote restriction
 
 
 def _get_top_tickers(n: int = 10) -> list[str]:
@@ -651,7 +650,7 @@ def poll_follower_tweets():
 
 
 def poll_qt_glazer_list():
-    global _qt_glazer_since_id, _qt_glazer_since_id_loaded, _qt_quote_forbidden_authors
+    global _qt_glazer_since_id, _qt_glazer_since_id_loaded
 
     if is_paused():
         logger.info("Bot paused — skipping QT Glazer poll")
@@ -704,11 +703,6 @@ def poll_qt_glazer_list():
             logger.debug(f"QT skip {tweet_id}: not ecosystem-relevant — {tweet_text[:60]}")
             continue
 
-        # Skip authors known to have Twitter quote restrictions (session-level)
-        if author_handle in _qt_quote_forbidden_authors:
-            logger.debug(f"QT skip {tweet_id}: @{author_handle} has quote restrictions (403 previously)")
-            continue
-
         # Atomic dedup claim
         if not try_claim_quote(tweet_id):
             logger.debug(f"QT skip {tweet_id}: already claimed")
@@ -742,8 +736,7 @@ def poll_qt_glazer_list():
         else:
             qt_tweet_id = post_quote_tweet(quote_text, tweet_id)
             if qt_tweet_id == QUOTE_TWEET_FORBIDDEN:
-                logger.warning(f"QT forbidden for {tweet_id}: @{author_handle} has quote restrictions — skipping all future tweets from them this session")
-                _qt_quote_forbidden_authors.add(author_handle)
+                logger.warning(f"QT forbidden for {tweet_id}: Twitter rejected quote — skipping this tweet")
                 continue
             if not qt_tweet_id:
                 logger.warning(f"QT post failed for {tweet_id}")

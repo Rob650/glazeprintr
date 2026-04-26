@@ -162,13 +162,26 @@ def _clean_tweet(text: str) -> str:
 
 
 def _log_post_error(action: str, e: tweepy.TweepyException) -> None:
-    status = getattr(getattr(e, "response", None), "status_code", None)
+    resp = getattr(e, "response", None)
+    status = getattr(resp, "status_code", None)
     if status == 402:
         logger.error(
             f"{action}: 402 Payment Required — ACTION REQUIRED: check Twitter Developer Portal "
             f"(developer.twitter.com). Possible causes: (1) API subscription plan expired or "
             f"insufficient tier, (2) monthly write quota exhausted, (3) OAuth tokens generated "
             f"before write permissions were enabled (regenerate tokens after enabling Read+Write)."
+        )
+        return
+    if status == 403:
+        try:
+            body = resp.json() if resp else None
+        except Exception:
+            body = getattr(resp, "text", None)
+        codes = getattr(e, "api_codes", [])
+        msgs = getattr(e, "api_messages", [])
+        logger.error(
+            f"{action}: 403 Forbidden — ACTION REQUIRED: check Twitter Developer Portal. "
+            f"Raw response: {body} | api_codes={codes} | api_messages={msgs} | exception={e}"
         )
         return
     codes = getattr(e, "api_codes", [])
@@ -221,9 +234,19 @@ def post_quote_tweet(text: str, quote_tweet_id: str, media_path: str | None = No
         logger.info(f"Posted quote tweet {tweet_id} (media={'yes' if media_path else 'no'}): {clean[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
+        logger.error(f"post_quote_tweet failed quoting tweet_id={quote_tweet_id}")
         _log_post_error("Failed to post quote tweet", e)
-        if "Quoting this post is not allowed" in str(e):
-            return QUOTE_TWEET_FORBIDDEN
+        resp = getattr(e, "response", None)
+        status = getattr(resp, "status_code", None)
+        if status == 403:
+            try:
+                body = resp.json() if resp else {}
+            except Exception:
+                body = {}
+            # Detect specific "quote not allowed" restriction on the target tweet
+            error_text = str(e) + str(body)
+            if "Quoting this post is not allowed" in error_text:
+                return QUOTE_TWEET_FORBIDDEN
         return None
 
 
