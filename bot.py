@@ -31,6 +31,7 @@ from twitter_client import (
 )
 import memory as mem
 from scraper import scrape_all_data, fetch_token_data_sync, format_comparative_context
+import intelligence as intel_mod
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ ECOSYSTEM_TOKENS = [
 _latest_projects: list[dict] = []
 _latest_dune_context: str = ""
 _latest_comparative_context: str = ""
+_latest_intelligence_context: str = ""
 
 _CONTRACT_RE = re.compile(
     r'\b(0x[0-9a-fA-F]{40,}|[1-9A-HJ-NP-Za-km-z]{32,44})\b'
@@ -88,6 +90,14 @@ _qt_glazer_since_id_loaded: bool = False
 def _get_top_tickers(n: int = 10) -> list[str]:
     """Return the top N ticker names (lowercase) from the most recent Printr scrape."""
     return [p["name"].lower() for p in _latest_projects[:n]]
+
+
+def _get_ecosystem_context_str() -> str:
+    """Combine intelligence context + comparative stats for Claude prompts."""
+    return "\n\n".join(filter(None, [
+        _latest_intelligence_context,
+        _latest_comparative_context,
+    ]))
 
 
 def _is_relevant_tweet(text: str) -> bool:
@@ -243,6 +253,15 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
         token_data = _get_tweet_token_data(tweet_text)
         if token_data:
             logger.info(f"Got token data for reply: {token_data.get('name')} mc={token_data.get('market_cap')}")
+            # Enrich with ecosystem intelligence metadata (rank, flags, heat score, tier)
+            cached_intel = intel_mod.get_intelligence()
+            if cached_intel:
+                intel_record = cached_intel.get_token_intelligence(token_data.get("name", ""))
+                if intel_record:
+                    token_data["ecosystem_rank"] = intel_record.get("ecosystem_rank")
+                    token_data["mover_flags"]    = intel_record.get("mover_flags", [])
+                    token_data["mc_tier"]        = intel_record.get("mc_tier")
+                    token_data["heat_score"]     = intel_record.get("heat_score")
     except Exception as e:
         logger.warning(f"Token lookup failed for tweet {tweet['id']}: {e}")
 
@@ -253,7 +272,7 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
             thread_context=thread_context,
             memory_context=memory_context,
             token_data=token_data,
-            ecosystem_comparative=_latest_comparative_context,
+            ecosystem_comparative=_get_ecosystem_context_str(),
             dune_context=_latest_dune_context,
         )
     except Exception as e:
@@ -465,11 +484,13 @@ _KEYWORD_SEARCH_WINDOW_MINUTES = 5
 
 
 def _build_keyword_query() -> str:
-    """Build a Twitter recent-search query from static keywords + dynamic top-10 tickers."""
+    """Build a Twitter search query with intelligence-prioritized tickers first."""
     bot_handle = os.environ.get("BOT_HANDLE", "printrglazr")
-    tickers = _get_top_tickers(10)
 
-    # Plain-word static terms + cashtag versions of dynamic tickers
+    # Hot tokens from intelligence come first so they're kept when query hits 512-char limit
+    intel = intel_mod.get_intelligence()
+    tickers = intel.get_qt_search_tickers(10) if intel else _get_top_tickers(10)
+
     terms: list[str] = list(_KEYWORD_SEARCH_STATIC)
     seen_lower = set(t.lower() for t in terms)
     for ticker in tickers:
@@ -479,7 +500,6 @@ def _build_keyword_query() -> str:
             seen_lower.add(cashtag.lower())
 
     query = f"({' OR '.join(terms)}) -is:retweet -is:reply -from:{bot_handle}"
-    # Twitter v2 recent search has a 512-char query limit — trim tickers if needed
     while len(query) > 512 and terms:
         terms.pop()
         query = f"({' OR '.join(terms)}) -is:retweet -is:reply -from:{bot_handle}"
@@ -744,6 +764,15 @@ def poll_qt_glazer_list():
         token_data = _get_tweet_token_data(tweet_text)
         if token_data:
             logger.info(f"QT token data: {token_data.get('name')} mc={token_data.get('market_cap')}")
+            # Enrich with intelligence metadata
+            cached_intel = intel_mod.get_intelligence()
+            if cached_intel:
+                intel_record = cached_intel.get_token_intelligence(token_data.get("name", ""))
+                if intel_record:
+                    token_data["ecosystem_rank"] = intel_record.get("ecosystem_rank")
+                    token_data["mover_flags"]    = intel_record.get("mover_flags", [])
+                    token_data["mc_tier"]        = intel_record.get("mc_tier")
+                    token_data["heat_score"]     = intel_record.get("heat_score")
     except Exception as e:
         logger.warning(f"QT token lookup failed for {tweet_id}: {e}")
 
@@ -752,7 +781,7 @@ def poll_qt_glazer_list():
             tweet_text,
             author_handle,
             token_data=token_data,
-            ecosystem_comparative=_latest_comparative_context,
+            ecosystem_comparative=_get_ecosystem_context_str(),
             dune_context=_latest_dune_context,
         )
     except Exception as e:
@@ -815,7 +844,7 @@ def refresh_ecosystem_context():
 
 async def refresh_top_tickers(max_attempts: int = 3):
     """Fetch current top tokens by market cap from Printr and cache for keyword scanning."""
-    global _latest_projects, _latest_dune_context, _latest_comparative_context
+    global _latest_projects, _latest_dune_context, _latest_comparative_context, _latest_intelligence_context
     logger.info("Refreshing top tickers from Printr marketplace...")
     delays = [30, 60]
     for attempt in range(max_attempts):
@@ -823,12 +852,15 @@ async def refresh_top_tickers(max_attempts: int = 3):
             projects = await scrape_all_data()
             if projects:
                 _latest_projects = projects
-                # Extract and cache ecosystem-level context
                 _latest_dune_context = projects[0].get("_dune_context") or ""
                 comp_stats = projects[0].get("_comparative_stats") or {}
                 _latest_comparative_context = format_comparative_context(comp_stats)
                 top = _get_top_tickers(10)
                 logger.info(f"Top tickers updated: {', '.join(f'${t.upper()}' for t in top)}")
+                # Update intelligence with the freshly-scraped data (avoid double fetch)
+                intel = await intel_mod.refresh_intelligence(projects)
+                if intel:
+                    _latest_intelligence_context = intel.format_for_prompt()
                 return
             logger.warning(f"refresh_top_tickers: scrape returned empty (attempt {attempt + 1}/{max_attempts})")
         except Exception as e:
@@ -841,7 +873,7 @@ async def refresh_top_tickers(max_attempts: int = 3):
 
 
 async def post_original_tweet():
-    global _latest_projects, _latest_dune_context, _latest_comparative_context
+    global _latest_projects, _latest_dune_context, _latest_comparative_context, _latest_intelligence_context
     if is_paused():
         logger.info("Bot paused — skipping original tweet job")
         return
@@ -849,9 +881,8 @@ async def post_original_tweet():
     logger.info("Running original tweet job...")
     try:
         projects = await scrape_all_data()
-        _latest_projects = projects  # cache for score card metric lookups
+        _latest_projects = projects
 
-        # Extract ecosystem-level context from the scrape results
         dune_ctx = ""
         comparative_ctx = ""
         if projects:
@@ -860,6 +891,18 @@ async def post_original_tweet():
             comparative_ctx = format_comparative_context(comp_stats)
             _latest_dune_context = dune_ctx
             _latest_comparative_context = comparative_ctx
+
+        # Update intelligence with fresh data, get priority ordering
+        intel = await intel_mod.refresh_intelligence(projects)
+        intel_ctx = ""
+        if intel:
+            _latest_intelligence_context = intel.format_for_prompt()
+            intel_ctx = _latest_intelligence_context
+            # Reorder projects: priority movers first so Claude sees them at the top
+            priority_names = set(intel.get_priority_tickers_for_originals(5))
+            priority_projs = [p for p in projects if p.get("name", "").lower() in priority_names]
+            other_projs    = [p for p in projects if p.get("name", "").lower() not in priority_names]
+            projects = priority_projs + other_projs
 
         for proj in projects:
             if proj.get("contract_address") or proj.get("market_cap"):
@@ -874,13 +917,18 @@ async def post_original_tweet():
                     staking_pct=proj.get("staking_pct"),
                 )
 
+        # Build full ecosystem context: intelligence + comparative stats + occasional macro
+        trending = intel.health.get("ecosystem_trending", "flat") if intel else "flat"
+        macro_ctx = intel_mod.get_macro_context(trending=trending) if random.random() < 0.35 else ""
+        combined_ctx = "\n\n".join(filter(None, [intel_ctx, comparative_ctx, macro_ctx]))
+
         memory_context = mem.get_memory_context()
         top_tickers = _get_top_tickers(10)
         tweet_text, img_path = generate_original_tweet(
             market_data=projects,
             memory_context=memory_context,
             top_tickers=top_tickers,
-            ecosystem_comparative=comparative_ctx,
+            ecosystem_comparative=combined_ctx,
             dune_context=dune_ctx,
         )
 
@@ -896,4 +944,33 @@ async def post_original_tweet():
                 logger.warning("Failed to post original tweet")
     except Exception as e:
         logger.error(f"Original tweet job error: {e}")
+
+
+async def refresh_intelligence_job():
+    """Fetch fresh market data every 15 min and update the intelligence cache."""
+    global _latest_projects, _latest_dune_context, _latest_comparative_context, _latest_intelligence_context
+    logger.info("Running intelligence refresh job (15-min cycle)...")
+    try:
+        projects = await scrape_all_data()
+        if not projects:
+            logger.warning("intelligence_job: scrape returned empty — keeping stale cache")
+            return
+
+        _latest_projects = projects
+        _latest_dune_context = projects[0].get("_dune_context") or ""
+        comp_stats = projects[0].get("_comparative_stats") or {}
+        _latest_comparative_context = format_comparative_context(comp_stats)
+
+        intel = await intel_mod.refresh_intelligence(projects)
+        if intel:
+            _latest_intelligence_context = intel.format_for_prompt()
+            kw = intel_mod.get_keyword_weights()
+            logger.info(
+                f"intelligence_job: done | trending={intel.health.get('ecosystem_trending')} "
+                f"momentum={intel.health.get('ecosystem_momentum_score')} | "
+                f"priority_originals={kw['originals'][:3]} "
+                f"qt_search={kw['qt_search'][:3]}"
+            )
+    except Exception as e:
+        logger.error(f"intelligence_job error: {e}")
 

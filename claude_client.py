@@ -747,6 +747,23 @@ def _format_token_data_block(token_data: dict) -> str:
     if num_pairs and num_pairs > 1:
         lines.append(f"  Trading pairs: {num_pairs} (multi-pair activity)")
 
+    # Intelligence metadata (injected by bot.py from the intelligence cache)
+    rank   = token_data.get("ecosystem_rank")
+    flags  = token_data.get("mover_flags") or []
+    heat   = token_data.get("heat_score")
+    tier   = token_data.get("mc_tier")
+    if rank or flags or heat is not None or tier:
+        intel_parts: list[str] = []
+        if rank:
+            intel_parts.append(f"Ecosystem rank #{rank}/16")
+        if heat is not None:
+            intel_parts.append(f"heat score {heat:.0f}/100")
+        if tier:
+            intel_parts.append(f"{tier}-cap tier")
+        if flags:
+            intel_parts.append(f"SIGNALS: {', '.join(flags).upper()}")
+        lines.append(f"  Intelligence: {' | '.join(intel_parts)}")
+
     lines.append("\nUse these numbers to make your reply informed. Reference actual metrics. Show you understand what the data means — don't just cite, INTERPRET.\n")
     return "\n".join(lines)
 

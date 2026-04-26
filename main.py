@@ -66,8 +66,10 @@ async def lifespan(app: FastAPI):
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True,
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    scheduler.add_job(bot.refresh_intelligence_job, "interval", minutes=15, id="intelligence_refresher", replace_existing=True,
+                      max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.start()
-    logger.info("Schedulers started: mentions poller (5 min), QT glazer (30 min), original tweets (60 min), ecosystem refresh (6h), ticker refresh (6h) — list poller DISABLED, follower scan DISABLED")
+    logger.info("Schedulers started: mentions (5 min), QT glazer (30 min), original tweets (60 min), intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h) — list poller DISABLED, follower scan DISABLED")
 
     yield
 
