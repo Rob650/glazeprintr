@@ -31,9 +31,9 @@ async def lifespan(app: FastAPI):
     # coalesce=True: if a run was delayed/missed, fire once and skip the backlog.
     # misfire_grace_time=60: tolerate up to 60 s of scheduler lag before skipping a run.
     _now = datetime.now(timezone.utc)
-    scheduler.add_job(bot.poll_list, "interval", minutes=5, id="list_poller", replace_existing=True,
+    scheduler.add_job(bot.poll_list, "interval", minutes=10, id="list_poller", replace_existing=True,
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
-    scheduler.add_job(bot.poll_mentions, "interval", minutes=5, id="mentions_poller", replace_existing=True,
+    scheduler.add_job(bot.poll_mentions, "interval", minutes=10, id="mentions_poller", replace_existing=True,
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     # Follower scan disabled — Twitter blocks unsolicited replies, wastes API credits.
     # scheduler.add_job(bot.poll_follower_tweets, "interval", minutes=5, id="follower_poller", replace_existing=True,
@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(bot.refresh_ecosystem_context, "interval", hours=6, id="ecosystem_refresher", replace_existing=True)
     scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True)
     scheduler.start()
-    logger.info("Schedulers started: list poller (5 min), mentions poller (5 min), original tweets (10 min), ecosystem refresh (6h), ticker refresh (6h) — follower scan DISABLED")
+    logger.info("Schedulers started: list poller (10 min), mentions poller (10 min), original tweets (10 min), ecosystem refresh (6h), ticker refresh (6h) — follower scan DISABLED")
 
     # Seed ecosystem context and top tickers on startup
     loop = asyncio.get_event_loop()
