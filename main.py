@@ -35,13 +35,11 @@ async def lifespan(app: FastAPI):
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.poll_mentions, "interval", minutes=5, id="mentions_poller", replace_existing=True,
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
-    scheduler.add_job(bot.poll_keyword_search, "interval", minutes=5, id="keyword_searcher", replace_existing=True,
-                      max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.post_original_tweet, "interval", minutes=10, id="original_tweeter", replace_existing=True)
     scheduler.add_job(bot.refresh_ecosystem_context, "interval", hours=6, id="ecosystem_refresher", replace_existing=True)
     scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True)
     scheduler.start()
-    logger.info("Schedulers started: list poller (5 min), mentions poller (5 min), keyword searcher (5 min), original tweets (10 min), ecosystem refresh (6h), ticker refresh (6h)")
+    logger.info("Schedulers started: list poller (5 min), mentions poller (5 min), original tweets (10 min), ecosystem refresh (6h), ticker refresh (6h)")
 
     # Seed ecosystem context and top tickers on startup
     loop = asyncio.get_event_loop()
@@ -214,14 +212,6 @@ async def api_trigger_mentions():
     logger.info("Manual mentions poll trigger via API")
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, bot.poll_mentions)
-    return {"status": "triggered", "dry_run": DRY_RUN}
-
-
-@app.post("/api/trigger-keyword-search")
-async def api_trigger_keyword_search():
-    logger.info("Manual keyword search trigger via API")
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, bot.poll_keyword_search)
     return {"status": "triggered", "dry_run": DRY_RUN}
 
 
