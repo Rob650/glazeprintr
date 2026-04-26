@@ -302,6 +302,60 @@ def fetch_list_tweets(list_id: str) -> list[dict]:
         return []
 
 
+def search_keyword_tweets(
+    query: str,
+    since_id: str | None = None,
+    start_time: datetime | None = None,
+) -> list[dict]:
+    """Search recent tweets matching query. Returns normalized tweet dicts."""
+    client = get_v2_client()
+    kwargs: dict = {
+        "query": query,
+        "max_results": 100,
+        "tweet_fields": ["author_id", "created_at", "text", "referenced_tweets", "attachments"],
+        "expansions": ["author_id", "referenced_tweets.id", "attachments.media_keys"],
+        "user_fields": ["username"],
+        "media_fields": ["url", "type", "preview_image_url"],
+    }
+    if since_id:
+        kwargs["since_id"] = since_id
+    if start_time:
+        kwargs["start_time"] = start_time
+
+    try:
+        response = client.search_recent_tweets(**kwargs)
+        if not response.data:
+            return []
+
+        users = {}
+        if response.includes and "users" in response.includes:
+            for u in response.includes["users"]:
+                users[u.id] = u.username
+
+        media_map = _build_media_map(response)
+
+        tweets = []
+        for tweet in response.data:
+            in_reply_to_tweet_id = None
+            for ref in (getattr(tweet, "referenced_tweets", None) or []):
+                if ref.type == "replied_to":
+                    in_reply_to_tweet_id = str(ref.id)
+                    break
+            tweets.append({
+                "id": str(tweet.id),
+                "text": tweet.text,
+                "author_id": str(tweet.author_id),
+                "author_handle": users.get(tweet.author_id, "unknown"),
+                "in_reply_to_tweet_id": in_reply_to_tweet_id,
+                "created_at": tweet.created_at,
+                "media_url": _extract_media_url(tweet, media_map),
+            })
+        return tweets
+    except tweepy.TweepyException as e:
+        logger.error(f"Failed to search keyword tweets: {e}")
+        return []
+
+
 def fetch_user_tweets(username: str, max_results: int = 20) -> list[dict]:
     """Fetch recent tweets from a user by username. Returns list of tweet dicts."""
     client = get_v2_client()

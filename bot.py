@@ -12,6 +12,7 @@ from database import (
     record_original_tweet, has_replied_mention, record_replied_mention,
     get_mentions_since_id, set_mentions_since_id,
     get_list_since_id, set_list_since_id,
+    get_keyword_search_since_id, set_keyword_search_since_id,
     try_claim_mention, try_claim_reply,
     store_ecosystem_tweet, get_ecosystem_context_age_hours,
 )
@@ -21,7 +22,7 @@ from claude_client import (
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
-    fetch_tweet_chain, fetch_user_tweets,
+    fetch_tweet_chain, fetch_user_tweets, search_keyword_tweets,
 )
 # image generation disabled
 # from image_generator import (
@@ -45,6 +46,9 @@ _list_poll_since_id_loaded: bool = False
 _mentions_since_id: str | None = None
 _mentions_since_id_loaded: bool = False
 _mentions_since_id_was_fresh: bool = False  # True when DB was wiped (since_id not persisted)
+
+_keyword_search_since_id: str | None = None
+_keyword_search_since_id_loaded: bool = False
 
 SKIP_HANDLES = {"printrglazr", "printr_money"}
 MAX_MENTION_AGE_MINUTES = 120
@@ -415,6 +419,62 @@ def poll_list():
         # Atomic claim — prevents race with concurrent poll_mentions on same tweet
         if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
             logger.debug(f"List tweet {tweet['id']} already claimed — skip")
+            continue
+        _handle_tweet(tweet)
+
+
+# Static keywords for keyword search polling (cashtag variants are added dynamically from top tickers)
+_KEYWORD_SEARCH_STATIC = ["printr", "pob", "brrr", "belief"]
+_KEYWORD_SEARCH_WINDOW_MINUTES = 5
+
+
+def _build_keyword_query() -> str:
+    """Build a Twitter recent-search query from static keywords + dynamic top-10 tickers."""
+    bot_handle = os.environ.get("BOT_HANDLE", "printrglazr")
+    tickers = _get_top_tickers(10)
+
+    # Plain-word static terms + cashtag versions of dynamic tickers
+    terms: list[str] = list(_KEYWORD_SEARCH_STATIC)
+    seen_lower = set(t.lower() for t in terms)
+    for ticker in tickers:
+        cashtag = f"${ticker.upper()}"
+        if cashtag.lower() not in seen_lower:
+            terms.append(cashtag)
+            seen_lower.add(cashtag.lower())
+
+    query = f"({' OR '.join(terms)}) -is:retweet -from:{bot_handle}"
+    # Twitter v2 recent search has a 512-char query limit — trim tickers if needed
+    while len(query) > 512 and terms:
+        terms.pop()
+        query = f"({' OR '.join(terms)}) -is:retweet -from:{bot_handle}"
+    return query
+
+
+def poll_keyword_search():
+    global _keyword_search_since_id, _keyword_search_since_id_loaded
+
+    if not _keyword_search_since_id_loaded:
+        _keyword_search_since_id = get_keyword_search_since_id()
+        _keyword_search_since_id_loaded = True
+
+    query = _build_keyword_query()
+    # Always enforce a 5-minute window as a hard safety net — even if since_id is reset,
+    # we never process tweets older than one polling interval.
+    start_time = datetime.now(timezone.utc) - timedelta(minutes=_KEYWORD_SEARCH_WINDOW_MINUTES)
+
+    logger.info(f"Polling keyword search since_id={_keyword_search_since_id} query={query[:80]}...")
+    tweets = search_keyword_tweets(query, since_id=_keyword_search_since_id, start_time=start_time)
+    logger.info(f"search_keyword_tweets returned {len(tweets)} tweet(s)")
+
+    if not tweets:
+        return
+
+    _keyword_search_since_id = str(max(int(t["id"]) for t in tweets))
+    set_keyword_search_since_id(_keyword_search_since_id)
+
+    for tweet in tweets:
+        if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
+            logger.debug(f"Keyword tweet {tweet['id']} already claimed — skip")
             continue
         _handle_tweet(tweet)
 

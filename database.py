@@ -134,6 +134,7 @@ def init_db():
 
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('mentions_since_id', '');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('list_since_id', '');
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('keyword_search_since_id', '');
         """)
 
 
@@ -454,6 +455,17 @@ def get_list_since_id() -> str | None:
 
 def set_list_since_id(since_id: str):
     set_state("list_since_id", since_id)
+
+
+# --- keyword search since_id persistence ---
+
+def get_keyword_search_since_id() -> str | None:
+    val = get_state("keyword_search_since_id")
+    return val if val else None
+
+
+def set_keyword_search_since_id(since_id: str):
+    set_state("keyword_search_since_id", since_id)
 
 
 # --- recent openers tracking (prevents repeated opening words) ---
