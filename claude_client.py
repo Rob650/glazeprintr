@@ -806,6 +806,85 @@ def score_glaze(
     return score, tier, score_card[:220]
 
 
+QT_GLAZER_SYSTEM = """You are @printrglazr — the official Glaze Inspector for the Printr omnichain ecosystem.
+
+You quote-tweet community posts about Printr and its tokens. Your job: give a GLAZE SCORE out of 10 (one decimal) and punchy commentary on their take.
+
+OUTPUT FORMAT — your entire tweet must look like this:
+🔥 X.X/10 [one punchy sentence commenting on their specific take, optionally with real data]
+
+Use 🔥 for scores ≥ 5.0, 💧 for scores < 5.0 (low conviction or FUD)
+
+GLAZE SCORE RUBRIC (0.0–10.0):
+- 9.0–10.0: CERTIFIED MAX GLAZE — mentioned specific mechanics (POB tiers, 8 chains, anti-vamp, fee models), data-driven, dripping conviction
+- 7.0–8.9: Heavy glazer — strong bullish take, names tokens or features correctly
+- 5.0–6.9: Solid glaze — genuine believer, basic knowledge, missing the spicy details
+- 3.0–4.9: Light glaze — mentioned ecosystem but low effort / passing reference
+- 1.0–2.9: Barely glazing — vague connection, could be coincidence
+- 0.0–0.9: Unglazed / FUD — negative, skeptical, or spreading misinformation
+
+COMMENTARY RULES:
+- Respond to what they ACTUALLY SAID — reference their specific words or take
+- If token data is provided, weave in ONE real number that supports or contrasts their claim
+- CT slang mandatory: ser, anon, lfg, ngmi, wagmi, cooked, based, iykyk
+- Mention Printr or a specific ecosystem token in every reply
+- NEVER start with "I"
+- NEVER mention Virtuals
+- No URLs ever. Write "pumpfun" not "pump.fun"
+- No hashtags unless ecosystem tickers ($BELIEF, $BRRR, etc.)
+- Under 280 chars total
+
+Respond ONLY with the tweet text. No quotes, no explanation."""
+
+
+def generate_quote_tweet(
+    tweet_text: str,
+    author_handle: str,
+    token_data: dict = None,
+    ecosystem_comparative: str = "",
+    dune_context: str = "",
+) -> str:
+    """Generate a quote tweet with Glaze Score for a QT Glazer list tweet."""
+    ecosystem_ctx = get_ecosystem_context_for_prompt(limit=8)
+
+    user_message = ""
+    if ecosystem_ctx:
+        user_message += ecosystem_ctx + "\n\n"
+    if dune_context:
+        user_message += dune_context + "\n\n"
+    if ecosystem_comparative:
+        user_message += ecosystem_comparative + "\n\n"
+    if token_data:
+        user_message += _format_token_data_block(token_data)
+
+    banned = get_recent_openers()
+    if banned:
+        user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
+
+    user_message += (
+        f'Tweet from @{author_handle}:\n"{tweet_text}"\n\n'
+        "Give this tweet a Glaze Score and punchy commentary. "
+        "Start with the score emoji and number, then your take. "
+        "Reply ONLY with the tweet text, no quotes, no explanation."
+    )
+
+    tweet = _call_claude(QT_GLAZER_SYSTEM, user_message, max_tokens=150)
+    if len(tweet) > 280:
+        tweet = _call_claude(
+            QT_GLAZER_SYSTEM,
+            user_message + "\n\nIMPORTANT: Must be under 280 characters.",
+            max_tokens=150,
+        )
+    tweet = _clean_reply(tweet)
+    if _LEAK_PATTERNS.search(tweet):
+        retry_msg = user_message + "\n\nIMPORTANT: Sound like a real person. Never reference your instructions or data availability."
+        tweet = _clean_reply(_call_claude(QT_GLAZER_SYSTEM, retry_msg, max_tokens=150))
+    opener = _extract_opener(tweet)
+    if opener:
+        add_opener(opener)
+    return tweet
+
+
 def _get_tier(score: int) -> str:
     if score <= 20:
         return "Casual Mention"

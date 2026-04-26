@@ -140,6 +140,18 @@ def init_db():
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('list_since_id', '');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('keyword_search_since_id', '');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('follower_search_since_id', '');
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('qt_glazer_since_id', '');
+
+            CREATE TABLE IF NOT EXISTS qt_glazer_quotes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tweet_id TEXT UNIQUE,
+                author_handle TEXT,
+                tweet_text TEXT,
+                quote_text TEXT,
+                qt_tweet_id TEXT,
+                dry_run INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
         """)
 
 
@@ -482,6 +494,40 @@ def get_follower_search_since_id() -> str | None:
 
 def set_follower_search_since_id(since_id: str):
     set_state("follower_search_since_id", since_id)
+
+
+# --- qt_glazer_since_id persistence ---
+
+def get_qt_glazer_since_id() -> str | None:
+    val = get_state("qt_glazer_since_id")
+    return val if val else None
+
+
+def set_qt_glazer_since_id(since_id: str):
+    set_state("qt_glazer_since_id", since_id)
+
+
+# --- qt_glazer_quotes (dedup + record for QT Glazer list) ---
+
+def try_claim_quote(tweet_id: str) -> bool:
+    """Atomically claim a tweet for quote-tweeting. Returns True only for the first caller."""
+    with db() as conn:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO qt_glazer_quotes (tweet_id) VALUES (?)",
+            (tweet_id,)
+        )
+        return cursor.rowcount == 1
+
+
+def record_quote_tweet(tweet_id: str, author_handle: str, tweet_text: str,
+                       quote_text: str, qt_tweet_id: str | None, dry_run: bool):
+    with db() as conn:
+        conn.execute(
+            """UPDATE qt_glazer_quotes
+               SET author_handle=?, tweet_text=?, quote_text=?, qt_tweet_id=?, dry_run=?
+               WHERE tweet_id=?""",
+            (author_handle, tweet_text[:500], quote_text, qt_tweet_id, int(dry_run), tweet_id)
+        )
 
 
 # --- recent openers tracking (prevents repeated opening words) ---

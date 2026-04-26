@@ -16,10 +16,12 @@ from database import (
     get_follower_search_since_id, set_follower_search_since_id,
     try_claim_mention, try_claim_reply,
     store_ecosystem_tweet, get_ecosystem_context_age_hours,
+    try_claim_quote, record_quote_tweet,
+    get_qt_glazer_since_id, set_qt_glazer_since_id,
 )
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
-    classify_tweet_intent,
+    classify_tweet_intent, generate_quote_tweet,
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
@@ -36,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
 X_LIST_ID = os.environ.get("X_LIST_ID", "")
+QT_GLAZER_LIST_ID = os.environ.get("QT_GLAZER_LIST_ID", "2048242501333799282")
 MAX_REPLIES_PER_ACCOUNT_HOUR = int(os.environ.get("MAX_REPLIES_PER_ACCOUNT_HOUR", "5"))
 MAX_SCORES_PER_DAY = int(os.environ.get("MAX_SCORES_PER_DAY", "20"))
 
@@ -70,6 +73,18 @@ _CONTRACT_RE = re.compile(
 # Core keywords — tweets matching any of these (or any cashtag, or any top-10 ticker) are engaged.
 _LIST_RELEVANCE_KEYWORDS = frozenset(["printr", "pob", "brrr", "belief"])
 
+# QT Glazer list — broader keyword set covering the full Printr/Fed ecosystem.
+_QT_GLAZER_KEYWORDS = frozenset([
+    "printr", "brrr", "fed", "belief", "rotus", "deployr", "fatchoi",
+    "stakrr", "masterprintr", "glaze", "glazeprintr", "staking",
+    "pob", "print", "noob", "cmyk", "patapim", "marmot", "fsjal", "ket",
+    "pve", "roi", "ooo", "fedprintr", "prinaboratory",
+])
+_QT_GLAZER_WINDOW_MINUTES = 20  # wider window for 10-min poll interval
+
+_qt_glazer_since_id: str | None = None
+_qt_glazer_since_id_loaded: bool = False
+
 
 def _get_top_tickers(n: int = 10) -> list[str]:
     """Return the top N ticker names (lowercase) from the most recent Printr scrape."""
@@ -82,6 +97,19 @@ def _is_relevant_tweet(text: str) -> bool:
         return True
     lower = text.lower()
     if any(kw in lower for kw in _LIST_RELEVANCE_KEYWORDS):
+        return True
+    return any(ticker in lower for ticker in _get_top_tickers(10))
+
+
+def _is_qt_glazer_relevant(text: str) -> bool:
+    """Returns True if the tweet is about the Printr/Fed ecosystem (for QT Glazer list)."""
+    if re.search(r'\$[a-zA-Z]{2,}', text):
+        return True
+    lower = text.lower()
+    if any(kw in lower for kw in _QT_GLAZER_KEYWORDS):
+        return True
+    # Also check known contract address pattern
+    if _CONTRACT_RE.search(text):
         return True
     return any(ticker in lower for ticker in _get_top_tickers(10))
 
@@ -618,6 +646,107 @@ def poll_follower_tweets():
             logger.debug(f"Follower tweet {tweet['id']} already claimed — skip")
             continue
         _handle_tweet(tweet)
+
+
+def poll_qt_glazer_list():
+    global _qt_glazer_since_id, _qt_glazer_since_id_loaded
+
+    if is_paused():
+        logger.info("Bot paused — skipping QT Glazer poll")
+        return
+
+    if not _qt_glazer_since_id_loaded:
+        _qt_glazer_since_id = get_qt_glazer_since_id()
+        _qt_glazer_since_id_loaded = True
+
+    logger.info(f"Polling QT Glazer list {QT_GLAZER_LIST_ID} (since_id={_qt_glazer_since_id})")
+    tweets = fetch_list_tweets(QT_GLAZER_LIST_ID)
+    logger.info(f"QT Glazer fetch returned {len(tweets)} tweet(s)")
+
+    if not tweets:
+        return
+
+    max_id = str(max(int(t["id"]) for t in tweets))
+    if _qt_glazer_since_id:
+        tweets = [t for t in tweets if int(t["id"]) > int(_qt_glazer_since_id)]
+    _qt_glazer_since_id = max_id
+    set_qt_glazer_since_id(max_id)
+
+    logger.info(f"QT Glazer: {len(tweets)} new tweet(s) after since_id filter")
+
+    bot_handle_lower = os.environ.get("BOT_HANDLE", "printrglazr").lower()
+    for tweet in tweets:
+        tweet_id = tweet["id"]
+        tweet_text = tweet.get("text", "")
+        author_handle = tweet.get("author_handle", "unknown").lower().lstrip("@")
+
+        # Skip our own tweets and known bot handles
+        if author_handle in SKIP_HANDLES:
+            logger.debug(f"QT skip: @{author_handle} is in SKIP_HANDLES")
+            continue
+
+        # Skip retweets (native RTs show as "RT @...")
+        if tweet_text.startswith("RT @"):
+            logger.debug(f"QT skip {tweet_id}: retweet")
+            continue
+
+        # Age gate
+        if not _is_recent_tweet(tweet, _QT_GLAZER_WINDOW_MINUTES):
+            age = _tweet_age_minutes(tweet)
+            age_str = f"{age:.1f}" if age is not None else "no timestamp"
+            logger.info(f"QT skip {tweet_id}: too old ({age_str} min, max {_QT_GLAZER_WINDOW_MINUTES})")
+            continue
+
+        # Ecosystem relevance filter
+        if not _is_qt_glazer_relevant(tweet_text):
+            logger.debug(f"QT skip {tweet_id}: not ecosystem-relevant — {tweet_text[:60]}")
+            continue
+
+        # Atomic dedup claim
+        if not try_claim_quote(tweet_id):
+            logger.debug(f"QT skip {tweet_id}: already claimed")
+            continue
+
+        logger.info(f"QT Glazer: quoting @{author_handle} ({tweet_id}): {tweet_text[:80]}")
+
+        token_data = None
+        try:
+            token_data = _get_tweet_token_data(tweet_text)
+            if token_data:
+                logger.info(f"QT token data: {token_data.get('name')} mc={token_data.get('market_cap')}")
+        except Exception as e:
+            logger.warning(f"QT token lookup failed for {tweet_id}: {e}")
+
+        try:
+            quote_text = generate_quote_tweet(
+                tweet_text,
+                author_handle,
+                token_data=token_data,
+                ecosystem_comparative=_latest_comparative_context,
+                dune_context=_latest_dune_context,
+            )
+        except Exception as e:
+            logger.error(f"QT Claude error for {tweet_id}: {e}")
+            continue
+
+        qt_tweet_id = None
+        if DRY_RUN:
+            logger.info(f"[DRY RUN] QT Glazer @{author_handle}: {quote_text[:80]}...")
+        else:
+            qt_tweet_id = post_quote_tweet(quote_text, tweet_id)
+            if not qt_tweet_id:
+                logger.warning(f"QT post failed for {tweet_id}")
+                continue
+            logger.info(f"QT Glazer posted: {qt_tweet_id} — {quote_text[:60]}...")
+
+        record_quote_tweet(
+            tweet_id=tweet_id,
+            author_handle=author_handle,
+            tweet_text=tweet_text,
+            quote_text=quote_text,
+            qt_tweet_id=qt_tweet_id,
+            dry_run=DRY_RUN,
+        )
 
 
 ECOSYSTEM_ACCOUNTS = ["masterprintr", "printr"]
