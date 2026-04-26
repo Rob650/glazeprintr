@@ -209,6 +209,9 @@ def post_tweet(text: str, media_path: str | None = None) -> str | None:
         return None
 
 
+QUOTE_TWEET_FORBIDDEN = "QUOTE_TWEET_FORBIDDEN"
+
+
 def post_quote_tweet(text: str, quote_tweet_id: str, media_path: str | None = None) -> str | None:
     client = get_v2_client()
     clean = _clean_tweet(text)
@@ -219,6 +222,8 @@ def post_quote_tweet(text: str, quote_tweet_id: str, media_path: str | None = No
         return tweet_id
     except tweepy.TweepyException as e:
         _log_post_error("Failed to post quote tweet", e)
+        if "Quoting this post is not allowed" in str(e):
+            return QUOTE_TWEET_FORBIDDEN
         return None
 
 
