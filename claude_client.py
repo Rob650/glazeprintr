@@ -777,20 +777,26 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     if banned:
         user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
 
-    # Build topic list — replace hardcoded token topics with dynamic versions when we have live top tickers
-    topics = list(_ORIGINAL_TWEET_TOPICS)
-    if top_tickers and len(top_tickers) >= 2:
-        smaller = [f"${t.upper()}" for t in top_tickers[1:]]
-        second_token = top_tickers[1].upper()
-        topics = [(k, v) for k, v in topics if k not in ("underrated_token", "fatchoi_spotlight")]
+    # Build topic list — individual spotlights for all 10 core tickers, $FATCHOI weighted 3x as platform mascot
+    _CORE_10_TICKERS = [
+        "fatchoi", "ooo", "patapim", "rotus", "roi",
+        "cmyk", "print", "pve", "belief", "deployr",
+    ]
+    topics = [(k, v) for k, v in _ORIGINAL_TWEET_TOPICS
+              if k not in ("underrated_token", "fatchoi_spotlight")]
+    for ticker in _CORE_10_TICKERS:
         topics.append((
-            "underrated_token",
-            f"Pick ONE of the current top Printr tokens and give it a full spotlight — {', '.join(smaller)}. Focus entirely on that one token.",
+            f"{ticker}_spotlight",
+            f"Spotlight ${ticker.upper()} specifically — its stats, momentum, "
+            f"or staking conviction. Focus entirely on ${ticker.upper()}.",
         ))
-        topics.append((
-            "second_token_spotlight",
-            f"Spotlight ${second_token} specifically — its stats, momentum, or staking conviction. Do NOT mention $BELIEF.",
-        ))
+    # $FATCHOI is the Printr mascot — 2 extra entries for 3x total frequency
+    topics.append(("fatchoi_extra1",
+        "Spotlight $FATCHOI — the Printr platform mascot. Lead with its best metric. "
+        "Make it feel like the mascot carrying the whole ecosystem."))
+    topics.append(("fatchoi_extra2",
+        "Heavy glaze on $FATCHOI specifically — the face of Printr. "
+        "Its conviction, staking, or momentum. Do NOT mention $BELIEF."))
 
     _topic_key, topic_instruction = random.choice(topics)
     user_message += (
