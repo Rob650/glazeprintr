@@ -52,7 +52,6 @@ _keyword_search_since_id_loaded: bool = False
 
 SKIP_HANDLES = {"printrglazr", "printr_money"}
 MAX_MENTION_AGE_MINUTES = 120
-MAX_LIST_AGE_HOURS = 1
 
 ECOSYSTEM_TOKENS = [
     "belief", "ooo", "rotus", "fatchoi", "deployr", "patapim",
@@ -382,11 +381,8 @@ def poll_list():
         _list_poll_since_id = get_list_since_id()
         _list_poll_since_id_loaded = True
 
-    # Cold start = no known position; use wider catch-up window to recover after downtime
-    is_cold_start = _list_poll_since_id is None
-
     # The Twitter List Tweets API does NOT support since_id — filtered client-side instead.
-    logger.info(f"Polling list {X_LIST_ID} (since_id={_list_poll_since_id}, cold_start={is_cold_start})")
+    logger.info(f"Polling list {X_LIST_ID} (since_id={_list_poll_since_id})")
     tweets = fetch_list_tweets(X_LIST_ID)
     logger.info(f"fetch_list_tweets returned {len(tweets)} tweet(s)")
 
@@ -402,20 +398,14 @@ def poll_list():
 
     logger.info(f"After since_id filter: {len(tweets)} candidate tweet(s)")
 
-    # On cold start, match mentions' 2h catch-up window; otherwise use the configured 1h limit
-    age_limit = MAX_MENTION_AGE_MINUTES if is_cold_start else MAX_LIST_AGE_HOURS * 60
-
     for tweet in tweets:
-        # Age check first — avoids polluting replied_mentions with tweets we'll never process
-        if not _is_recent_tweet(tweet, age_limit):
+        # Hard 5-min window — same as keyword search; prevents stale replies after restarts
+        if not _is_recent_tweet(tweet, _KEYWORD_SEARCH_WINDOW_MINUTES):
             age = _tweet_age_minutes(tweet)
             age_str = f"{age:.1f}" if age is not None else "no timestamp"
-            logger.info(f"SKIPPING list tweet {tweet['id']} — too old ({age_str} min, max {age_limit}min)")
+            logger.info(f"SKIPPING list tweet {tweet['id']} — too old ({age_str} min, max {_KEYWORD_SEARCH_WINDOW_MINUTES}min)")
             continue
-        # Relevance check — skip tweets unrelated to crypto/Printr (lunch, sports, etc.)
-        if not _is_relevant_tweet(tweet.get("text", "")):
-            logger.debug(f"SKIPPING list tweet {tweet['id']} — not crypto/Printr related")
-            continue
+        # No relevance filter — the list is curated; engage with whatever the member is talking about
         # Atomic claim — prevents race with concurrent poll_mentions on same tweet
         if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
             logger.debug(f"List tweet {tweet['id']} already claimed — skip")
