@@ -55,6 +55,18 @@ def _fetch_ticker_change(ticker: str) -> tuple[str, float]:
         data = _fetch_url_sync(url, timeout=5)
         pairs = (data or {}).get("pairs") or []
         if pairs:
+            if not contract:
+                # Printr contracts always end in "brrr" — filter out wrong tokens from search
+                brrr_pairs = [
+                    p for p in pairs
+                    if (p.get("baseToken") or {}).get("address", "").endswith("brrr")
+                ]
+                if not brrr_pairs:
+                    logging.getLogger(__name__).warning(
+                        f"_fetch_ticker_change: no brrr-suffix address for {ticker!r} — skipping (wrong token)"
+                    )
+                    return ticker, 0.0
+                pairs = brrr_pairs
             pairs.sort(key=lambda p: float((p.get("liquidity") or {}).get("usd") or 0), reverse=True)
             return ticker, float((pairs[0].get("priceChange") or {}).get("h24") or 0)
     except Exception:

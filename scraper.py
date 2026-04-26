@@ -51,11 +51,24 @@ HEADERS = {
 }
 
 # Known contract addresses to always track via DexScreener even if the printr.money API is down.
+# All Printr ecosystem contracts end in "brrr" — any address that doesn't is the wrong token.
 KNOWN_CONTRACTS: dict[str, str] = {
-    "belief": "29CWsqH84TykHDDwA6DtETUtXQPuKbVgKCmxtkBsbrrr",
-    "rotus": "C8Lwj83fBz9bPKSUxNLEc2QkLF7oVkV7Ja9UKSFLbrrr",
+    "belief":  "29CWsqH84TykHDDwA6DtETUtXQPuKbVgKCmxtkBsbrrr",
+    "rotus":   "C8Lwj83fBz9bPKSUxNLEc2QkLF7oVkV7Ja9UKSFLbrrr",
     "deployr": "8JvDVZK6CHFhwwBUgZcEy18i1xXQzAHfimYarmoobrrr",
     "fatchoi": "57dYAUq7Y4hiCSdAB7iBDg4gcYFq7HeUaEs3XnNkbrrr",
+    "ooo":     "G6mNZN8o16QBcTqfuEx6FzjiWa94B1XWhfyDxjDibrrr",
+    "patapim": "W6wjBw8HJ65PyyHr9RkTXK7dKvrP1CNkgPWVEHDbrrr",
+    "roi":     "BdqNyg2k9TrYUGjadxMRjxv7xn1pPYpfeDXj5wSnbrrr",
+    "cmyk":    "4AMw5Rb14KLe8L9jSXMJpDX5q8dy9rFqh7W8b1tubrrr",
+    "print":   "DU3xkZs5jqzPCmovs6F5rAiBt8dQwoxwLHTw9cyBbrrr",
+    "pve":     "J5tUvJp3CH5dtyQSAsuRqXDLb2cdWDwerDj83w1gbrrr",
+    "brrr":    "3o1V1iFqHk3pu6vDDv85ctU2q28uepGdsFbch7uKbrrr",
+    "quack":   "5ZDkPQjiUM4ukKnBwzi6EX8WS5x39by2pYVFa7ivbrrr",
+    "lfp":     "8jPSBB5Ebp6bRWJzwstUEm4Xs2p2jQadewyyxedxbrrr",
+    "stakr":   "Da2Vkk5u3zMkyfa61mqs6Kgtdpf7akKK1FrZvzkDbrrr",
+    "pob500":  "B8ErKF68PpedTmRMdbhRzTgJ8u5XfHRp2v8krg8Qbrrr",
+    "fsjal":   "AiNFufCfmKADdtq3cz2Xaj94EVWfKG1iHyyWZLFEbrrr",
 }
 
 # Key tokens to attempt per-token staking fetch if bulk staking endpoint fails
@@ -706,6 +719,16 @@ def fetch_token_data_sync(query: str, timeout: int = 8) -> Optional[dict]:
     result: dict = {}
 
     if pairs:
+        if not is_contract:
+            # Printr contracts always end in "brrr" — filter out wrong tokens from search
+            brrr_pairs = [
+                p for p in pairs
+                if (p.get("baseToken") or {}).get("address", "").endswith("brrr")
+            ]
+            if not brrr_pairs:
+                logger.warning(f"fetch_token_data_sync: no brrr-suffix address for {query!r} — skipping (wrong token)")
+            else:
+                pairs = brrr_pairs
         pairs.sort(key=lambda p: float((p.get("liquidity") or {}).get("usd") or 0), reverse=True)
         pair = pairs[0]
         base = pair.get("baseToken") or {}
