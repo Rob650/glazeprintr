@@ -236,3 +236,8 @@ async def api_reset_counter():
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "glazeprintr", "dry_run": DRY_RUN}
+
+
+@app.get("/api/status")
+async def api_status():
+    return {"status": "ok"}

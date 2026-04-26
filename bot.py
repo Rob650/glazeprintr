@@ -620,7 +620,7 @@ def poll_follower_tweets():
         _handle_tweet(tweet)
 
 
-ECOSYSTEM_ACCOUNTS = ["printr", "masterprintr", "FedPrintr", "prinaboratory"]
+ECOSYSTEM_ACCOUNTS = ["masterprintr", "printr"]
 ECOSYSTEM_REFRESH_INTERVAL_HOURS = 6
 
 
