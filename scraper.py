@@ -16,42 +16,16 @@ DUNE_DASHBOARD_URL = "https://dune.com/defioasis/printr"
 _EVM_CONTRACT_RE = re.compile(r'^0x[0-9a-fA-F]{40,}$')
 _SOLANA_CONTRACT_RE = re.compile(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$')
 
-PRINTR_ENDPOINTS = [
-    "https://app.printr.money/api/getMarketplaceTokens",
-    "https://api.printr.money/v1/tokens?sort=marketCap&order=desc&limit=50",
-    "https://app.printr.money/api/tokens?sort=market_cap&limit=50",
-    "https://app.printr.money/api/v1/tokens?sort=market_cap",
-]
-
-PRINTR_STAKING_ENDPOINTS = [
-    "https://api.printr.money/v1/staking",
-    "https://api.printr.money/v1/tokens/staking",
-    "https://app.printr.money/api/staking",
-    "https://app.printr.money/api/v1/staking",
-]
-
-PRINTR_TOKEN_STAKING_TEMPLATES = [
-    "https://api.printr.money/v1/tokens/{}/staking",
-    "https://api.printr.money/v1/staking/{}",
-    "https://app.printr.money/api/tokens/{}/staking",
-]
+# Legacy scraping endpoints kept for reference but no longer used in active code
+PRINTR_TOKEN_STAKING_TEMPLATES: list[str] = []
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://app.printr.money/",
-    "Origin": "https://app.printr.money",
-    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"macOS"',
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "same-origin",
 }
 
-# Known contract addresses to always track via DexScreener even if the printr.money API is down.
-# All Printr ecosystem contracts end in "brrr" — any address that doesn't is the wrong token.
+# Known contract addresses — primary token list. All Printr ecosystem contracts end in "brrr".
+# Marketplace scraping is replaced by the official Partner API; this is our canonical list.
 KNOWN_CONTRACTS: dict[str, str] = {
     "belief":  "29CWsqH84TykHDDwA6DtETUtXQPuKbVgKCmxtkBsbrrr",
     "rotus":   "C8Lwj83fBz9bPKSUxNLEc2QkLF7oVkV7Ja9UKSFLbrrr",
@@ -71,8 +45,11 @@ KNOWN_CONTRACTS: dict[str, str] = {
     "fsjal":   "AiNFufCfmKADdtq3cz2Xaj94EVWfKG1iHyyWZLFEbrrr",
 }
 
-# Key tokens to attempt per-token staking fetch if bulk staking endpoint fails
+# Key tokens for priority staking data lookups
 KEY_TOKENS = {"belief", "fatchoi", "ooo", "print", "rotus", "deployr"}
+
+# Reverse mapping: contract address → ticker name (built from KNOWN_CONTRACTS)
+_CONTRACT_TO_NAME: dict[str, str] = {v: k for k, v in KNOWN_CONTRACTS.items()}
 
 
 def _extract_staking_pct(data: dict) -> Optional[float]:
@@ -96,6 +73,27 @@ def _extract_staking_pct(data: dict) -> Optional[float]:
             return float(total_staked) / float(total_supply) * 100
         except (ZeroDivisionError, TypeError, ValueError):
             pass
+    return None
+
+
+def _compute_staking_pct_from_api(
+    contract: str,
+    staking_totals: dict[str, float],
+    dex_data: dict,
+) -> Optional[float]:
+    """
+    Compute staking % using Printr API total-staked and DexScreener total supply.
+    total_supply is derived from fdv / price (DexScreener fully-diluted valuation).
+    """
+    staked = staking_totals.get(contract, 0.0)
+    if staked <= 0:
+        return None
+    price = dex_data.get("price") or 0.0
+    fdv = dex_data.get("market_cap") or 0.0  # scraper stores fdv as market_cap
+    if price > 0 and fdv > 0:
+        total_supply = fdv / price
+        if total_supply > 0:
+            return min(staked / total_supply * 100, 100.0)
     return None
 
 
@@ -166,160 +164,20 @@ async def _fetch_dexscreener(session: aiohttp.ClientSession, contract_address: s
     return {}
 
 
-async def _try_printr_cloudscraper() -> list[dict]:
-    """Try Printr endpoints with cloudscraper to bypass Cloudflare IUAM challenge."""
-    loop = asyncio.get_running_loop()
-
-    def _sync_fetch():
-        try:
-            import cloudscraper  # type: ignore
-        except ImportError:
-            logger.debug("cloudscraper not installed")
-            return []
-
-        scraper = cloudscraper.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "mobile": False}
-        )
-        for endpoint in PRINTR_ENDPOINTS:
-            try:
-                resp = scraper.get(endpoint, timeout=20)
-                if resp.status_code == 200:
-                    try:
-                        data = resp.json()
-                    except Exception:
-                        logger.debug(f"cloudscraper: {endpoint} not JSON")
-                        continue
-                    tokens = (
-                        data if isinstance(data, list)
-                        else (
-                            data.get("tokens") or data.get("data")
-                            or data.get("results") or data.get("items") or []
-                        )
-                    )
-                    if tokens:
-                        logger.info(f"cloudscraper: {len(tokens)} tokens from {endpoint}")
-                        return tokens
-                    logger.debug(f"cloudscraper: {endpoint} → 200 but no tokens")
-                elif resp.status_code in (401, 403):
-                    logger.debug(f"cloudscraper: {endpoint} → {resp.status_code}, skipping")
-            except Exception as e:
-                logger.debug(f"cloudscraper: {endpoint} error: {e}")
-        return []
-
-    return await loop.run_in_executor(None, _sync_fetch)
-
-
-async def _try_printr_api(session: aiohttp.ClientSession) -> list[dict]:
-    tokens = await _try_printr_cloudscraper()
-    if tokens:
-        return tokens
-
-    for endpoint in PRINTR_ENDPOINTS:
-        for attempt in range(2):
-            try:
-                async with session.get(
-                    endpoint, timeout=aiohttp.ClientTimeout(total=15)
-                ) as resp:
-                    ct = resp.headers.get("content-type", "")
-                    logger.debug(f"printr endpoint {endpoint} → {resp.status} ct={ct!r}")
-                    if resp.status == 200:
-                        body = await resp.read()
-                        if not body:
-                            break
-                        try:
-                            import json as _json_local
-                            data = _json_local.loads(body)
-                        except Exception:
-                            logger.debug(f"printr endpoint {endpoint}: body not JSON (len={len(body)})")
-                            break
-                        tokens = (
-                            data
-                            if isinstance(data, list)
-                            else (
-                                data.get("tokens")
-                                or data.get("data")
-                                or data.get("results")
-                                or data.get("items")
-                                or []
-                            )
-                        )
-                        if tokens:
-                            logger.info(f"Got {len(tokens)} tokens from {endpoint}")
-                            return tokens
-                        logger.debug(f"printr endpoint {endpoint}: 200 but no tokens in response")
-                        break
-                    elif resp.status in (401, 403):
-                        logger.debug(f"printr endpoint {endpoint}: {resp.status} — skipping")
-                        break
-            except asyncio.TimeoutError:
-                logger.debug(f"printr endpoint {endpoint} attempt {attempt+1}: timeout")
-            except Exception as e:
-                logger.debug(f"printr endpoint {endpoint} attempt {attempt+1}: {e}")
-            if attempt == 0:
-                await asyncio.sleep(2)
-    logger.warning("All printr.money endpoints failed — will use known contracts only")
-    return []
-
-
-async def _fetch_bulk_staking(session: aiohttp.ClientSession) -> dict[str, float]:
-    """Try bulk staking endpoints. Returns {token_name -> staking_pct} or empty dict."""
-    for endpoint in PRINTR_STAKING_ENDPOINTS:
-        try:
-            async with session.get(
-                endpoint, timeout=aiohttp.ClientTimeout(total=12)
-            ) as resp:
-                if resp.status == 200 and "json" in resp.headers.get("content-type", ""):
-                    data = await resp.json()
-                    items = (
-                        data
-                        if isinstance(data, list)
-                        else (
-                            data.get("staking")
-                            or data.get("data")
-                            or data.get("tokens")
-                            or data.get("results")
-                            or []
-                        )
-                    )
-                    result: dict[str, float] = {}
-                    for item in items:
-                        name = (
-                            item.get("ticker")
-                            or item.get("symbol")
-                            or item.get("name")
-                            or ""
-                        ).lower().lstrip("$")
-                        pct = _extract_staking_pct(item)
-                        if name and pct is not None:
-                            result[name] = pct
-                    if result:
-                        logger.info(f"Got staking data for {len(result)} tokens from {endpoint}")
-                        return result
-        except Exception as e:
-            logger.debug(f"Staking endpoint {endpoint}: {e}")
-    logger.info("Bulk staking endpoints failed — will try per-token for key tokens")
-    return {}
-
-
-async def _fetch_token_staking(
-    session: aiohttp.ClientSession, name: str, contract: str
-) -> Optional[float]:
-    """Try per-token staking endpoints. Returns staking_pct (0-100) or None."""
-    identifiers = [ident for ident in [contract, name] if ident]
-    for ident in identifiers:
-        for tmpl in PRINTR_TOKEN_STAKING_TEMPLATES:
-            try:
-                url = tmpl.format(ident)
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                    if resp.status == 200 and "json" in resp.headers.get("content-type", ""):
-                        data = await resp.json()
-                        pct = _extract_staking_pct(data)
-                        if pct is not None:
-                            logger.info(f"Got staking data for {name}: {pct:.1f}% from {url}")
-                            return pct
-            except Exception:
-                pass
-    return None
+async def _fetch_staking_from_partner_api() -> dict[str, float]:
+    """
+    Fetch staking totals per token from the Printr Partner API.
+    Returns {contract_address: total_staked_tokens}.
+    Runs in a thread since the Partner API client is sync.
+    """
+    from printr_api import fetch_staking_totals_async
+    try:
+        totals = await fetch_staking_totals_async(max_pages=60, page_size=100)
+        logger.info(f"Printr Partner API: staking totals for {len(totals)} tokens")
+        return totals
+    except Exception as e:
+        logger.warning(f"Printr Partner API staking fetch failed: {e}")
+        return {}
 
 
 def _normalize_token(raw: dict) -> Optional[dict]:
@@ -561,58 +419,62 @@ def format_comparative_context(stats: dict) -> str:
 
 async def scrape_all_data() -> list[dict]:
     """
-    Fetch and enrich project data from printr.money + DexScreener + staking + Dune.
+    Fetch and enrich token data using the Printr Partner API (staking) +
+    DexScreener (price/volume/MC) + Dune analytics.
+
+    Token list: KNOWN_CONTRACTS + any new contracts discovered from Partner API staking data.
+    Staking %: computed from Partner API total-staked and DexScreener FDV/price.
+
     Returns a list of project dicts sorted by market cap descending.
-    Each dict may include staking_pct (float, 0-100) if available.
     Returns an empty list on total failure — callers must handle this gracefully.
     """
     results: list[dict] = []
 
     async with aiohttp.ClientSession(headers=HEADERS) as session:
-        raw_tokens, staking_map, dune_ctx = await asyncio.gather(
-            _try_printr_api(session),
-            _fetch_bulk_staking(session),
+        # Fetch staking totals and Dune analytics in parallel
+        staking_totals, dune_ctx = await asyncio.gather(
+            _fetch_staking_from_partner_api(),
             fetch_dune_context(session),
         )
-        tokens = [t for t in (_normalize_token(r) for r in raw_tokens) if t]
 
-        # Enrich tokens with bulk staking data
-        for token in tokens:
-            if token["name"] in staking_map and token.get("staking_pct") is None:
-                token["staking_pct"] = staking_map[token["name"]]
+        # Build token list: start from KNOWN_CONTRACTS, then add any new contracts
+        # discovered from recent staking activity (all-brrr Solana addresses).
+        tokens: list[dict] = []
+        known_contracts_lower = {v.lower() for v in KNOWN_CONTRACTS.values()}
 
-        found_names = {t["name"] for t in tokens}
         for name, addr in KNOWN_CONTRACTS.items():
-            if name not in found_names:
-                tokens.append({
-                    "name": name,
-                    "contract_address": addr,
-                    "market_cap": 0,
-                    "price": 0,
-                    "price_change_24h": 0,
-                    "volume": 0,
-                    "liquidity": 0,
-                    "staking_pct": staking_map.get(name),
-                })
+            tokens.append({
+                "name": name,
+                "contract_address": addr,
+                "market_cap": 0,
+                "price": 0,
+                "price_change_24h": 0,
+                "volume": 0,
+                "liquidity": 0,
+                "staking_pct": None,
+            })
+
+        # Add tokens discovered from staking positions (new Printr launches)
+        for contract in staking_totals:
+            if contract.lower() not in known_contracts_lower:
+                # Only add Solana-style addresses (not EVM, not chain prefixes)
+                if _SOLANA_CONTRACT_RE.match(contract) and contract not in _CONTRACT_TO_NAME:
+                    tokens.append({
+                        "name": contract[:8].lower(),  # short placeholder name
+                        "contract_address": contract,
+                        "market_cap": 0,
+                        "price": 0,
+                        "price_change_24h": 0,
+                        "volume": 0,
+                        "liquidity": 0,
+                        "staking_pct": None,
+                    })
+                    known_contracts_lower.add(contract.lower())
 
         with_contract = [t for t in tokens if t.get("contract_address")]
         without_contract = [t for t in tokens if not t.get("contract_address")]
 
-        # Per-token staking fetch for key tokens that still have no staking data
-        key_missing_staking = [
-            t for t in tokens
-            if t["name"] in KEY_TOKENS and t.get("staking_pct") is None
-        ]
-        if key_missing_staking:
-            staking_coros = [
-                _fetch_token_staking(session, t["name"], t.get("contract_address", ""))
-                for t in key_missing_staking
-            ]
-            staking_results = await asyncio.gather(*staking_coros, return_exceptions=True)
-            for token, pct in zip(key_missing_staking, staking_results):
-                if isinstance(pct, float):
-                    token["staking_pct"] = pct
-
+        # Enrich all tokens with DexScreener data in parallel
         if with_contract:
             dex_coros = [
                 _fetch_dexscreener(session, t["contract_address"])
@@ -622,6 +484,12 @@ async def scrape_all_data() -> list[dict]:
             for token, dex in zip(with_contract, dex_results):
                 if isinstance(dex, dict) and dex:
                     token.update({k: v for k, v in dex.items() if v})
+                # Compute staking % from Partner API totals + DexScreener supply
+                contract = token.get("contract_address", "")
+                if contract and staking_totals:
+                    pct = _compute_staking_pct_from_api(contract, staking_totals, token)
+                    if pct is not None:
+                        token["staking_pct"] = pct
                 results.append(token)
 
         results.extend(without_contract)
@@ -652,60 +520,15 @@ def _fetch_url_sync(url: str, timeout: int = 8) -> Optional[dict]:
         return None
 
 
-def _printr_staking_sync(ticker: str, contract: str = "", timeout: int = 6) -> Optional[float]:
-    """Try Printr API to get staking % for a token. Returns float or None."""
-    identifiers = [i for i in [contract, ticker.lower().lstrip("$")] if i]
-    for ident in identifiers:
-        for tmpl in PRINTR_TOKEN_STAKING_TEMPLATES:
-            data = _fetch_url_sync(tmpl.format(ident), timeout=timeout)
-            if data:
-                pct = _extract_staking_pct(data)
-                if pct is not None:
-                    return pct
-    return None
-
-
-def _printr_token_info_sync(ticker: str, timeout: int = 6) -> Optional[dict]:
-    """Try Printr API token listing endpoints to get holder count and other Printr-specific data."""
-    ticker_lower = ticker.lower().lstrip("$")
-    for endpoint in PRINTR_ENDPOINTS:
-        data = _fetch_url_sync(endpoint, timeout=timeout)
-        if not data:
-            continue
-        tokens = data if isinstance(data, list) else (
-            data.get("tokens") or data.get("data") or data.get("results") or []
-        )
-        for t in tokens:
-            name = (t.get("ticker") or t.get("symbol") or t.get("name") or "").lower().lstrip("$")
-            if name == ticker_lower:
-                result = {}
-                staking_pct = _extract_staking_pct(t)
-                if staking_pct is not None:
-                    result["staking_pct"] = staking_pct
-                for field, keys in [
-                    ("holder_count", ["holder_count", "holderCount", "holders", "holder_count_total"]),
-                    ("total_staked", ["total_staked", "totalStaked", "staked_amount"]),
-                    ("total_supply", ["total_supply", "totalSupply", "supply"]),
-                    ("market_cap", ["market_cap", "marketCap", "mc"]),
-                    ("price", ["price", "priceUsd"]),
-                    ("volume", ["volume_24h", "volume24h", "volume"]),
-                ]:
-                    for k in keys:
-                        if t.get(k) is not None:
-                            try:
-                                result[field] = float(t[k])
-                            except (TypeError, ValueError):
-                                pass
-                            break
-                if result:
-                    return result
-    return None
-
-
 def fetch_token_data_sync(query: str, timeout: int = 8) -> Optional[dict]:
-    """Synchronously look up a token by contract address or ticker.
-    Pulls from DexScreener (price/volume/MC/age) and Printr API (staking %, holders).
-    Returns a dict with all available fields, or None if nothing found."""
+    """
+    Synchronously look up a token by contract address or $ticker.
+    Primary source: DexScreener (price/volume/MC/age/txns).
+    Returns a dict with all available fields, or None if nothing found.
+
+    Used for real-time lookups when the bot sees a $ticker or contract address
+    in an incoming tweet/mention.
+    """
     query = query.strip()
     if not query:
         return None
@@ -752,7 +575,6 @@ def fetch_token_data_sync(query: str, timeout: int = 8) -> Optional[dict]:
         result["price_change_1h"] = float(chg.get("h1") or 0)
         result["price_change_5m"] = float(chg.get("m5") or 0)
 
-        # Transaction data at multiple intervals
         for period_key, period_label in [("h24", "24h"), ("h6", "6h"), ("h1", "1h"), ("m5", "5m")]:
             txns = (pair.get("txns") or {}).get(period_key) or {}
             buys = int(txns.get("buys") or 0)
@@ -775,29 +597,12 @@ def fetch_token_data_sync(query: str, timeout: int = 8) -> Optional[dict]:
 
         result["num_pairs"] = len(pairs)
 
-    ticker = result.get("name", query if not is_contract else "")
-    contract = result.get("contract_address", query if is_contract else "")
-
-    printr_info = _printr_token_info_sync(ticker, timeout=6) if ticker else None
-    if printr_info:
-        for k, v in printr_info.items():
-            if result.get(k) is None:
-                result[k] = v
-        if printr_info.get("staking_pct") is not None:
-            result["staking_pct"] = printr_info["staking_pct"]
-
-    if result.get("staking_pct") is None and ticker:
-        pct = _printr_staking_sync(ticker, contract, timeout=6)
-        if pct is not None:
-            result["staking_pct"] = pct
-
     if not result:
         logger.warning(f"No data found for token query: {query!r}")
         return None
 
     logger.info(
         f"fetch_token_data_sync({query!r}): name={result.get('name')} "
-        f"mc={result.get('market_cap')} staking={result.get('staking_pct')} "
-        f"holders={result.get('holder_count')}"
+        f"mc={result.get('market_cap')} staking={result.get('staking_pct')}"
     )
     return result
