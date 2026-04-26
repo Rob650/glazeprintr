@@ -85,6 +85,7 @@ def _extract_staking_pct(data: dict) -> Optional[float]:
 
 
 async def _fetch_dexscreener(session: aiohttp.ClientSession, contract_address: str) -> dict:
+    """Fetch rich token data from DexScreener — price, volume, txns, buy/sell ratio, age, etc."""
     url = DEXSCREENER_API.format(contract_address)
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
@@ -97,15 +98,54 @@ async def _fetch_dexscreener(session: aiohttp.ClientSession, contract_address: s
                         reverse=True,
                     )
                     pair = pairs[0]
-                    return {
+                    result = {
                         "price": float(pair.get("priceUsd") or 0),
-                        "volume": float((pair.get("volume") or {}).get("h24") or 0),
                         "market_cap": float(pair.get("fdv") or pair.get("marketCap") or 0),
                         "liquidity": float((pair.get("liquidity") or {}).get("usd") or 0),
-                        "price_change_24h": float(
-                            (pair.get("priceChange") or {}).get("h24") or 0
-                        ),
+                        "chain": pair.get("chainId", ""),
+                        "dex": pair.get("dexId", ""),
                     }
+
+                    # Volume at multiple intervals
+                    vol = pair.get("volume") or {}
+                    result["volume"] = float(vol.get("h24") or 0)
+                    result["volume_6h"] = float(vol.get("h6") or 0)
+                    result["volume_1h"] = float(vol.get("h1") or 0)
+                    result["volume_5m"] = float(vol.get("m5") or 0)
+
+                    # Price changes at multiple intervals
+                    chg = pair.get("priceChange") or {}
+                    result["price_change_24h"] = float(chg.get("h24") or 0)
+                    result["price_change_6h"] = float(chg.get("h6") or 0)
+                    result["price_change_1h"] = float(chg.get("h1") or 0)
+                    result["price_change_5m"] = float(chg.get("m5") or 0)
+
+                    # Transaction counts — buy/sell ratio is alpha
+                    for period_key, period_label in [("h24", "24h"), ("h6", "6h"), ("h1", "1h"), ("m5", "5m")]:
+                        txns = (pair.get("txns") or {}).get(period_key) or {}
+                        buys = int(txns.get("buys") or 0)
+                        sells = int(txns.get("sells") or 0)
+                        if buys or sells:
+                            result[f"buys_{period_label}"] = buys
+                            result[f"sells_{period_label}"] = sells
+                            result[f"txns_{period_label}"] = buys + sells
+
+                    # Pair age
+                    created_at = pair.get("pairCreatedAt")
+                    if created_at:
+                        result["pair_created_at"] = created_at
+                        try:
+                            import time as _time
+                            age_seconds = _time.time() - created_at / 1000 if created_at > 1e10 else 0
+                            if age_seconds > 0:
+                                result["age_days"] = age_seconds / 86400
+                        except Exception:
+                            pass
+
+                    # Number of pairs (indicates trading activity breadth)
+                    result["num_pairs"] = len(pairs)
+
+                    return result
     except Exception as e:
         logger.warning(f"DexScreener error for {contract_address}: {e}")
     return {}
@@ -263,17 +303,17 @@ def _normalize_token(raw: dict) -> Optional[dict]:
 
 async def fetch_dune_context(session: aiohttp.ClientSession) -> str:
     """
-    Fetch Printr on-chain analytics from Dune dashboard.
+    Fetch Printr on-chain analytics from Dune API.
     Requires DUNE_API_KEY env var and optionally DUNE_QUERY_IDS (comma-separated query IDs).
-    Falls back to returning the dashboard URL as context if credentials are absent.
+    Falls back to a placeholder if credentials are absent.
     """
     api_key = os.environ.get("DUNE_API_KEY", "")
     if not api_key:
-        return f"Printr on-chain analytics available at {DUNE_DASHBOARD_URL}"
+        return ""
 
     query_ids_env = os.environ.get("DUNE_QUERY_IDS", "")
     if not query_ids_env:
-        return f"Printr on-chain analytics available at {DUNE_DASHBOARD_URL}"
+        return ""
 
     query_ids = [q.strip() for q in query_ids_env.split(",") if q.strip()]
     headers = {"X-DUNE-API-KEY": api_key, "Content-Type": "application/json"}
@@ -282,24 +322,184 @@ async def fetch_dune_context(session: aiohttp.ClientSession) -> str:
     for query_id in query_ids:
         try:
             url = f"https://api.dune.com/api/v1/query/{query_id}/results"
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    rows = (data.get("result") or {}).get("rows") or []
+                    result = data.get("result") or {}
+                    rows = result.get("rows") or []
+                    metadata = result.get("metadata") or {}
+                    col_names = metadata.get("column_names") or []
                     if rows:
-                        parts.append(f"[query {query_id}] {rows[:5]}")
-                        logger.info(f"Dune query {query_id}: {len(rows)} rows")
+                        # Format as readable metrics instead of raw JSON
+                        formatted_rows = []
+                        for row in rows[:8]:  # top 8 rows
+                            formatted = ", ".join(
+                                f"{k}={_format_dune_value(v)}" for k, v in row.items()
+                                if v is not None and k not in ("_col0",)
+                            )
+                            if formatted:
+                                formatted_rows.append(f"  {formatted}")
+                        if formatted_rows:
+                            parts.append(f"[Dune query {query_id}]:\n" + "\n".join(formatted_rows))
+                        logger.info(f"Dune query {query_id}: {len(rows)} rows, cols={col_names}")
         except Exception as e:
             logger.warning(f"Dune query {query_id} failed: {e}")
 
     if parts:
-        return f"Printr on-chain analytics ({DUNE_DASHBOARD_URL}):\n" + "\n".join(parts)
-    return f"Printr on-chain analytics available at {DUNE_DASHBOARD_URL}"
+        return "ON-CHAIN ANALYTICS (Dune):\n" + "\n".join(parts)
+    return ""
+
+
+def _format_dune_value(v) -> str:
+    """Format a Dune analytics value for readability."""
+    if isinstance(v, float):
+        if v >= 1e6:
+            return f"${v/1e6:.2f}M"
+        elif v >= 1e3:
+            return f"${v/1e3:.1f}K"
+        elif v < 1 and v > 0:
+            return f"{v:.6f}"
+        return f"{v:,.0f}"
+    return str(v)
+
+
+def compute_comparative_stats(projects: list[dict]) -> dict:
+    """
+    Compute comparative/relative stats across the ecosystem.
+    Returns a dict of insights that can be injected into Claude prompts.
+    """
+    if not projects:
+        return {}
+
+    stats: dict = {}
+
+    # Ecosystem aggregate
+    total_mc = sum(p.get("market_cap") or 0 for p in projects)
+    total_vol = sum(p.get("volume") or 0 for p in projects)
+    total_liq = sum(p.get("liquidity") or 0 for p in projects)
+    tokens_with_staking = [p for p in projects if p.get("staking_pct") is not None]
+    avg_staking = (
+        sum(p["staking_pct"] for p in tokens_with_staking) / len(tokens_with_staking)
+        if tokens_with_staking else None
+    )
+
+    stats["ecosystem_total_mc"] = total_mc
+    stats["ecosystem_total_vol_24h"] = total_vol
+    stats["ecosystem_total_liquidity"] = total_liq
+    stats["ecosystem_token_count"] = len(projects)
+    if avg_staking is not None:
+        stats["ecosystem_avg_staking_pct"] = avg_staking
+
+    # Biggest mover
+    movers = [p for p in projects if p.get("price_change_24h") is not None]
+    if movers:
+        best = max(movers, key=lambda p: p["price_change_24h"])
+        worst = min(movers, key=lambda p: p["price_change_24h"])
+        stats["biggest_gainer"] = {"name": best["name"], "change_24h": best["price_change_24h"]}
+        stats["biggest_loser"] = {"name": worst["name"], "change_24h": worst["price_change_24h"]}
+
+    # Volume concentration
+    if total_vol > 0:
+        top_vol = sorted(projects, key=lambda p: p.get("volume") or 0, reverse=True)
+        if top_vol:
+            top_share = (top_vol[0].get("volume") or 0) / total_vol * 100
+            stats["top_volume_token"] = top_vol[0]["name"]
+            stats["top_volume_share_pct"] = top_share
+
+    # Buy/sell pressure across ecosystem
+    total_buys = sum(p.get("buys_24h") or 0 for p in projects)
+    total_sells = sum(p.get("sells_24h") or 0 for p in projects)
+    if total_buys + total_sells > 0:
+        stats["ecosystem_buy_pct"] = total_buys / (total_buys + total_sells) * 100
+        stats["ecosystem_total_txns_24h"] = total_buys + total_sells
+
+    # Tokens with short-term momentum (1h price change > 5%)
+    hot_tokens = [
+        p["name"] for p in projects
+        if (p.get("price_change_1h") or 0) > 5
+    ]
+    if hot_tokens:
+        stats["hot_tokens_1h"] = hot_tokens
+
+    # Highest staking conviction
+    if tokens_with_staking:
+        top_staker = max(tokens_with_staking, key=lambda p: p["staking_pct"])
+        stats["highest_staking"] = {"name": top_staker["name"], "pct": top_staker["staking_pct"]}
+
+    # Recent launches (age < 7 days)
+    new_launches = [
+        p for p in projects
+        if p.get("age_days") is not None and p["age_days"] < 7
+    ]
+    if new_launches:
+        stats["new_launches_7d"] = [{"name": p["name"], "age_days": p["age_days"], "mc": p.get("market_cap", 0)} for p in new_launches]
+
+    return stats
+
+
+def format_comparative_context(stats: dict) -> str:
+    """Format comparative stats into a prompt-injectable string."""
+    if not stats:
+        return ""
+
+    lines = ["ECOSYSTEM COMPARATIVE DATA (use these for context and comparisons):"]
+
+    mc = stats.get("ecosystem_total_mc", 0)
+    if mc:
+        mc_str = f"${mc/1e6:.2f}M" if mc >= 1e6 else f"${mc:,.0f}"
+        lines.append(f"  Total ecosystem market cap: {mc_str}")
+
+    vol = stats.get("ecosystem_total_vol_24h", 0)
+    if vol:
+        vol_str = f"${vol/1e6:.2f}M" if vol >= 1e6 else f"${vol:,.0f}"
+        lines.append(f"  Total 24h volume across ecosystem: {vol_str}")
+
+    liq = stats.get("ecosystem_total_liquidity", 0)
+    if liq:
+        liq_str = f"${liq/1e6:.2f}M" if liq >= 1e6 else f"${liq:,.0f}"
+        lines.append(f"  Total ecosystem liquidity: {liq_str}")
+
+    lines.append(f"  Tracked tokens: {stats.get('ecosystem_token_count', 0)}")
+
+    avg_s = stats.get("ecosystem_avg_staking_pct")
+    if avg_s is not None:
+        lines.append(f"  Avg staking across ecosystem: {avg_s:.1f}%")
+
+    bg = stats.get("biggest_gainer")
+    if bg:
+        lines.append(f"  Biggest 24h gainer: ${bg['name'].upper()} at {bg['change_24h']:+.1f}%")
+
+    bl = stats.get("biggest_loser")
+    if bl and bl["change_24h"] < 0:
+        lines.append(f"  Biggest 24h decliner: ${bl['name'].upper()} at {bl['change_24h']:+.1f}%")
+
+    bp = stats.get("ecosystem_buy_pct")
+    txns = stats.get("ecosystem_total_txns_24h")
+    if bp is not None and txns:
+        lines.append(f"  Ecosystem buy pressure: {bp:.0f}% buys across {txns:,} txns in 24h")
+
+    hs = stats.get("highest_staking")
+    if hs:
+        lines.append(f"  Highest conviction (staking): ${hs['name'].upper()} at {hs['pct']:.0f}% staked")
+
+    hot = stats.get("hot_tokens_1h")
+    if hot:
+        lines.append(f"  Hot in last hour (>5% move): {', '.join(f'${t.upper()}' for t in hot)}")
+
+    nl = stats.get("new_launches_7d")
+    if nl:
+        launch_str = ", ".join(
+            f"${l['name'].upper()} ({l['age_days']:.1f}d old, MC={'${:.0f}'.format(l['mc']) if l['mc'] < 1e6 else '${:.2f}M'.format(l['mc']/1e6)})"
+            for l in nl[:3]
+        )
+        lines.append(f"  New launches (<7d): {launch_str}")
+
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 async def scrape_all_data() -> list[dict]:
     """
-    Fetch and enrich project data from printr.money + DexScreener + staking endpoints.
+    Fetch and enrich project data from printr.money + DexScreener + staking + Dune.
     Returns a list of project dicts sorted by market cap descending.
     Each dict may include staking_pct (float, 0-100) if available.
     Returns an empty list on total failure — callers must handle this gracefully.
@@ -307,9 +507,10 @@ async def scrape_all_data() -> list[dict]:
     results: list[dict] = []
 
     async with aiohttp.ClientSession(headers=HEADERS) as session:
-        raw_tokens, staking_map = await asyncio.gather(
+        raw_tokens, staking_map, dune_ctx = await asyncio.gather(
             _try_printr_api(session),
             _fetch_bulk_staking(session),
+            fetch_dune_context(session),
         )
         tokens = [t for t in (_normalize_token(r) for r in raw_tokens) if t]
 
@@ -369,6 +570,12 @@ async def scrape_all_data() -> list[dict]:
         f"scrape_all_data: {len(results)} projects collected, "
         f"{staking_count} with staking data"
     )
+
+    # Attach ecosystem-level metadata to the result set for downstream use
+    if results:
+        results[0]["_dune_context"] = dune_ctx or ""
+        results[0]["_comparative_stats"] = compute_comparative_stats(results)
+
     return results
 
 
@@ -456,6 +663,7 @@ def fetch_token_data_sync(query: str, timeout: int = 8) -> Optional[dict]:
         result["name"] = base.get("symbol", query)
         result["contract_address"] = base.get("address", query if is_contract else "")
         result["chain"] = pair.get("chainId", "")
+        result["dex"] = pair.get("dexId", "")
         result["price"] = float(pair.get("priceUsd") or 0)
         result["market_cap"] = float(pair.get("fdv") or pair.get("marketCap") or 0)
         result["liquidity"] = float((pair.get("liquidity") or {}).get("usd") or 0)
@@ -464,23 +672,36 @@ def fetch_token_data_sync(query: str, timeout: int = 8) -> Optional[dict]:
         result["volume"] = float(vol.get("h24") or 0)
         result["volume_6h"] = float(vol.get("h6") or 0)
         result["volume_1h"] = float(vol.get("h1") or 0)
+        result["volume_5m"] = float(vol.get("m5") or 0)
 
         chg = pair.get("priceChange") or {}
         result["price_change_24h"] = float(chg.get("h24") or 0)
         result["price_change_6h"] = float(chg.get("h6") or 0)
         result["price_change_1h"] = float(chg.get("h1") or 0)
+        result["price_change_5m"] = float(chg.get("m5") or 0)
 
-        txns = (pair.get("txns") or {}).get("h24") or {}
-        buys = int(txns.get("buys") or 0)
-        sells = int(txns.get("sells") or 0)
-        if buys or sells:
-            result["txns_24h"] = buys + sells
-            result["buys_24h"] = buys
-            result["sells_24h"] = sells
+        # Transaction data at multiple intervals
+        for period_key, period_label in [("h24", "24h"), ("h6", "6h"), ("h1", "1h"), ("m5", "5m")]:
+            txns = (pair.get("txns") or {}).get(period_key) or {}
+            buys = int(txns.get("buys") or 0)
+            sells = int(txns.get("sells") or 0)
+            if buys or sells:
+                result[f"txns_{period_label}"] = buys + sells
+                result[f"buys_{period_label}"] = buys
+                result[f"sells_{period_label}"] = sells
 
         created_at = pair.get("pairCreatedAt")
         if created_at:
             result["pair_created_at"] = created_at
+            try:
+                import time as _time
+                age_seconds = _time.time() - created_at / 1000 if created_at > 1e10 else 0
+                if age_seconds > 0:
+                    result["age_days"] = age_seconds / 86400
+            except Exception:
+                pass
+
+        result["num_pairs"] = len(pairs)
 
     ticker = result.get("name", query if not is_contract else "")
     contract = result.get("contract_address", query if is_contract else "")

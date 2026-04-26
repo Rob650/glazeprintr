@@ -30,7 +30,7 @@ from twitter_client import (
 #     generate_glaze_score_card, generate_ecosystem_stats_card, remix_tweet_image,
 # )
 import memory as mem
-from scraper import scrape_all_data, fetch_token_data_sync
+from scraper import scrape_all_data, fetch_token_data_sync, format_comparative_context
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,8 @@ ECOSYSTEM_TOKENS = [
 ]
 
 _latest_projects: list[dict] = []
+_latest_dune_context: str = ""
+_latest_comparative_context: str = ""
 
 _CONTRACT_RE = re.compile(
     r'\b(0x[0-9a-fA-F]{40,}|[1-9A-HJ-NP-Za-km-z]{32,44})\b'
@@ -224,6 +226,8 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
             thread_context=thread_context,
             memory_context=memory_context,
             token_data=token_data,
+            ecosystem_comparative=_latest_comparative_context,
+            dune_context=_latest_dune_context,
         )
     except Exception as e:
         logger.error(f"Claude error for tweet {tweet['id']}: {e}")
@@ -616,7 +620,7 @@ def poll_follower_tweets():
         _handle_tweet(tweet)
 
 
-ECOSYSTEM_ACCOUNTS = ["printr", "masterprintr"]
+ECOSYSTEM_ACCOUNTS = ["printr", "masterprintr", "FedPrintr", "prinaboratory"]
 ECOSYSTEM_REFRESH_INTERVAL_HOURS = 6
 
 
@@ -649,7 +653,7 @@ def refresh_ecosystem_context():
 
 async def refresh_top_tickers(max_attempts: int = 3):
     """Fetch current top tokens by market cap from Printr and cache for keyword scanning."""
-    global _latest_projects
+    global _latest_projects, _latest_dune_context, _latest_comparative_context
     logger.info("Refreshing top tickers from Printr marketplace...")
     delays = [30, 60]
     for attempt in range(max_attempts):
@@ -657,6 +661,10 @@ async def refresh_top_tickers(max_attempts: int = 3):
             projects = await scrape_all_data()
             if projects:
                 _latest_projects = projects
+                # Extract and cache ecosystem-level context
+                _latest_dune_context = projects[0].pop("_dune_context", "") or ""
+                comp_stats = projects[0].pop("_comparative_stats", {}) or {}
+                _latest_comparative_context = format_comparative_context(comp_stats)
                 top = _get_top_tickers(10)
                 logger.info(f"Top tickers updated: {', '.join(f'${t.upper()}' for t in top)}")
                 return
@@ -671,7 +679,7 @@ async def refresh_top_tickers(max_attempts: int = 3):
 
 
 async def post_original_tweet():
-    global _latest_projects
+    global _latest_projects, _latest_dune_context, _latest_comparative_context
     if is_paused():
         logger.info("Bot paused — skipping original tweet job")
         return
@@ -680,6 +688,16 @@ async def post_original_tweet():
     try:
         projects = await scrape_all_data()
         _latest_projects = projects  # cache for score card metric lookups
+
+        # Extract ecosystem-level context from the scrape results
+        dune_ctx = ""
+        comparative_ctx = ""
+        if projects:
+            dune_ctx = projects[0].pop("_dune_context", "") or ""
+            comp_stats = projects[0].pop("_comparative_stats", {}) or {}
+            comparative_ctx = format_comparative_context(comp_stats)
+            _latest_dune_context = dune_ctx
+            _latest_comparative_context = comparative_ctx
 
         for proj in projects:
             if proj.get("contract_address") or proj.get("market_cap"):
@@ -696,7 +714,13 @@ async def post_original_tweet():
 
         memory_context = mem.get_memory_context()
         top_tickers = _get_top_tickers(10)
-        tweet_text = generate_original_tweet(market_data=projects, memory_context=memory_context, top_tickers=top_tickers)
+        tweet_text = generate_original_tweet(
+            market_data=projects,
+            memory_context=memory_context,
+            top_tickers=top_tickers,
+            ecosystem_comparative=comparative_ctx,
+            dune_context=dune_ctx,
+        )
 
         img_path = None  # image generation disabled
 
