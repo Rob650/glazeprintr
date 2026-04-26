@@ -1168,7 +1168,7 @@ def _get_tier(score: int) -> str:
 
 def _call_claude(system: str, user_message: str, max_tokens: int = 150) -> str:
     response = get_client().messages.create(
-        model="claude-haiku-4-5-20251001",
+        model="claude-sonnet-4-6",
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user_message}],
