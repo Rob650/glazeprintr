@@ -75,10 +75,10 @@ _LIST_RELEVANCE_KEYWORDS = frozenset(["printr", "pob", "brrr", "belief"])
 
 # QT Glazer list — broader keyword set covering the full Printr/Fed ecosystem.
 _QT_GLAZER_KEYWORDS = frozenset([
-    "printr", "brrr", "fed", "belief", "rotus", "deployr", "fatchoi",
+    "printr", "brrr", "belief", "rotus", "deployr", "fatchoi",
     "stakrr", "masterprintr", "glaze", "glazeprintr", "staking",
     "pob", "print", "noob", "cmyk", "patapim", "marmot", "fsjal", "ket",
-    "pve", "roi", "ooo", "fedprintr", "prinaboratory",
+    "pve", "roi", "ooo", "prinaboratory",
 ])
 _QT_GLAZER_WINDOW_MINUTES = 20  # wider window for 10-min poll interval
 
