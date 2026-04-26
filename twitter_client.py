@@ -70,12 +70,14 @@ def upload_media(image_path: str) -> str | None:
         return None
 
 
-def _media_kwargs(media_path: str | None) -> dict:
-    """Return media_ids kwarg dict if media_path is given and upload succeeds."""
+def _media_kwargs(media_path: str | None) -> tuple[dict, bool]:
+    """Return (media_ids kwarg dict, upload_succeeded). Dict is empty if no path or upload failed."""
     if not media_path:
-        return {}
+        return {}, False
     media_id = upload_media(media_path)
-    return {"media_ids": [media_id]} if media_id else {}
+    if media_id:
+        return {"media_ids": [media_id]}, True
+    return {}, False
 
 
 def get_bot_user_id() -> str | None:
@@ -195,14 +197,16 @@ def _log_post_error(action: str, e: tweepy.TweepyException) -> None:
 def post_reply(reply_text: str, in_reply_to_tweet_id: str, media_path: str | None = None) -> str | None:
     client = get_v2_client()
     clean = _clean_tweet(reply_text)
+    media_kwargs, media_ok = _media_kwargs(media_path)
     try:
         response = client.create_tweet(
             text=clean,
             in_reply_to_tweet_id=in_reply_to_tweet_id,
-            **_media_kwargs(media_path),
+            **media_kwargs,
         )
         tweet_id = response.data["id"]
-        logger.info(f"Posted reply {tweet_id} (media={'yes' if media_path else 'no'}): {clean[:60]}...")
+        media_status = "uploaded" if media_ok else ("upload_failed" if media_path else "no_media")
+        logger.info(f"Posted reply {tweet_id} (media={media_status}): {clean[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
         _log_post_error("Failed to post reply", e)
@@ -212,10 +216,12 @@ def post_reply(reply_text: str, in_reply_to_tweet_id: str, media_path: str | Non
 def post_tweet(text: str, media_path: str | None = None) -> str | None:
     client = get_v2_client()
     clean = _clean_tweet(text)
+    media_kwargs, media_ok = _media_kwargs(media_path)
     try:
-        response = client.create_tweet(text=clean, **_media_kwargs(media_path))
+        response = client.create_tweet(text=clean, **media_kwargs)
         tweet_id = response.data["id"]
-        logger.info(f"Posted original tweet {tweet_id} (media={'yes' if media_path else 'no'}): {clean[:60]}...")
+        media_status = "uploaded" if media_ok else ("upload_failed" if media_path else "no_media")
+        logger.info(f"Posted original tweet {tweet_id} (media={media_status}): {clean[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
         _log_post_error("Failed to post tweet", e)
@@ -228,10 +234,12 @@ QUOTE_TWEET_FORBIDDEN = "QUOTE_TWEET_FORBIDDEN"
 def post_quote_tweet(text: str, quote_tweet_id: str, media_path: str | None = None) -> str | None:
     client = get_v2_client()
     clean = _clean_tweet(text)
+    media_kwargs, media_ok = _media_kwargs(media_path)
     try:
-        response = client.create_tweet(text=clean, quote_tweet_id=quote_tweet_id, **_media_kwargs(media_path))
+        response = client.create_tweet(text=clean, quote_tweet_id=quote_tweet_id, **media_kwargs)
         tweet_id = response.data["id"]
-        logger.info(f"Posted quote tweet {tweet_id} (media={'yes' if media_path else 'no'}): {clean[:60]}...")
+        media_status = "uploaded" if media_ok else ("upload_failed" if media_path else "no_media")
+        logger.info(f"Posted quote tweet {tweet_id} (media={media_status}): {clean[:60]}...")
         return tweet_id
     except tweepy.TweepyException as e:
         logger.error(f"post_quote_tweet failed quoting tweet_id={quote_tweet_id}")

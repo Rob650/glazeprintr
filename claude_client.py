@@ -166,13 +166,19 @@ def _pick_meme(ticker: str | None) -> str | None:
         return None
     ticker_dir = os.path.join(_MEMES_DIR, ticker.lower())
     if not os.path.isdir(ticker_dir):
+        logging.getLogger(__name__).warning(f"_pick_meme: no directory for ticker={ticker!r} at {ticker_dir!r} (memes_dir={_MEMES_DIR!r})")
         return None
     candidates = [
         os.path.join(ticker_dir, f)
         for f in os.listdir(ticker_dir)
         if os.path.splitext(f)[1].lower() in _MEME_EXTS
     ]
-    return random.choice(candidates) if candidates else None
+    if not candidates:
+        logging.getLogger(__name__).warning(f"_pick_meme: directory exists for {ticker!r} but no image files found")
+        return None
+    chosen = random.choice(candidates)
+    logging.getLogger(__name__).info(f"_pick_meme: picked {chosen!r} for ticker={ticker!r} ({len(candidates)} candidates)")
+    return chosen
 
 
 def _clean_reply(text: str) -> str:
