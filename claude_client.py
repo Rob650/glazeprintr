@@ -10,6 +10,7 @@ from scraper import _fetch_url_sync, DEXSCREENER_SEARCH_API, DEXSCREENER_API, KN
 
 # Strips/replaces URLs Claude sneaks in despite prompt instructions
 _HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+_TWITTER_URL_RE = re.compile(r'\b(?:twitter\.com|x\.com)/\S*', re.IGNORECASE)
 _PUMP_FUN_RE = re.compile(r'\bpump\.fun\S*', re.IGNORECASE)
 _PRINTR_MONEY_RE = re.compile(r'\bapp\.printr\.money\S*', re.IGNORECASE)
 # Strips contract addresses Claude might include despite prompt rules
@@ -185,6 +186,7 @@ def _pick_meme(ticker: str | None) -> str | None:
 def _clean_reply(text: str) -> str:
     """Strip URLs, contract addresses, and normalize whitespace."""
     text = _HTTPS_RE.sub('', text)
+    text = _TWITTER_URL_RE.sub('', text)
     text = _PUMP_FUN_RE.sub('pumpfun', text)
     text = _PRINTR_MONEY_RE.sub('Printr', text)
     text = _EVM_ADDR_RE.sub('', text)
@@ -1101,8 +1103,10 @@ def generate_quote_tweet(
     if banned:
         user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
 
+    clean_source = _HTTPS_RE.sub('', tweet_text)
+    clean_source = _TWITTER_URL_RE.sub('', clean_source).strip()
     user_message += (
-        f'Tweet from @{author_handle}:\n"{tweet_text}"\n\n'
+        f'Tweet from @{author_handle}:\n"{clean_source}"\n\n'
         "Give this tweet a Glaze Score and punchy commentary. "
         "Start with the score emoji and number, then your take. "
         "Reply ONLY with the tweet text, no quotes, no explanation."

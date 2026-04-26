@@ -20,6 +20,7 @@ if _missing:
     )
 
 _HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+_TWITTER_URL_RE = re.compile(r'\b(?:twitter\.com|x\.com)/\S*', re.IGNORECASE)
 _PUMP_FUN_RE = re.compile(r'\bpump\.fun\S*', re.IGNORECASE)
 _PRINTR_MONEY_RE = re.compile(r'\bapp\.printr\.money\S*', re.IGNORECASE)
 
@@ -154,6 +155,7 @@ def fetch_mentions(since_id: str | None = None) -> list[dict]:
 def _clean_tweet(text: str) -> str:
     """Strip URLs, normalize whitespace, ensure ends with \\n\\n🙏, truncate to 280 chars."""
     text = _HTTPS_RE.sub('', text)
+    text = _TWITTER_URL_RE.sub('', text)
     text = _PUMP_FUN_RE.sub('pumpfun', text)
     text = _PRINTR_MONEY_RE.sub('Printr', text)
     text = re.sub(r'[ \t]+', ' ', text).strip()
