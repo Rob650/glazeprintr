@@ -35,6 +35,8 @@ async def lifespan(app: FastAPI):
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.poll_mentions, "interval", minutes=5, id="mentions_poller", replace_existing=True,
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    scheduler.add_job(bot.poll_qt_glazer_list, "interval", minutes=10, id="qt_glazer_poller", replace_existing=True,
+                      max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     # Follower scan disabled — Twitter blocks unsolicited replies, wastes API credits.
     # scheduler.add_job(bot.poll_follower_tweets, "interval", minutes=5, id="follower_poller", replace_existing=True,
     #                   max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
@@ -42,7 +44,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(bot.refresh_ecosystem_context, "interval", hours=6, id="ecosystem_refresher", replace_existing=True)
     scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True)
     scheduler.start()
-    logger.info("Schedulers started: list poller (5 min), mentions poller (5 min), original tweets (10 min), ecosystem refresh (6h), ticker refresh (6h) — follower scan DISABLED")
+    logger.info("Schedulers started: list poller (5 min), mentions poller (5 min), QT glazer (10 min), original tweets (10 min), ecosystem refresh (6h), ticker refresh (6h) — follower scan DISABLED")
 
     # Seed ecosystem context and top tickers on startup
     loop = asyncio.get_event_loop()
@@ -223,6 +225,14 @@ async def api_trigger_follower_poll():
     logger.info("Manual follower tweet poll trigger via API")
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, bot.poll_follower_tweets)
+    return {"status": "triggered", "dry_run": DRY_RUN}
+
+
+@app.post("/api/trigger-qt-glazer")
+async def api_trigger_qt_glazer():
+    logger.info("Manual QT Glazer poll trigger via API")
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, bot.poll_qt_glazer_list)
     return {"status": "triggered", "dry_run": DRY_RUN}
 
 
