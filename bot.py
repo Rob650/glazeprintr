@@ -308,6 +308,9 @@ def score_tweet(tweet: dict, thread_context: list[dict] | None = None) -> bool:
         record_score(tweet_id, author_handle, score, tier, score_card, None, dry_run=True)
     else:
         quote_id = post_quote_tweet(score_card, tweet_id, media_path=img_path)
+        if not quote_id:
+            logger.warning(f"Failed to post glaze score for @{author_handle} ({tweet_id})")
+            return False
         record_score(tweet_id, author_handle, score, tier, score_card, quote_id, dry_run=False)
         logger.info(f"Glaze scored @{author_handle}: {score}/100 [{tier}] img={'yes' if img_path else 'no'}")
     return True
@@ -398,6 +401,7 @@ def poll_list():
 
     logger.info(f"After since_id filter: {len(tweets)} candidate tweet(s)")
 
+    bot_handle_lower = os.environ.get("BOT_HANDLE", "printrglazr").lower()
     for tweet in tweets:
         # Hard 5-min window — same as keyword search; prevents stale replies after restarts
         if not _is_recent_tweet(tweet, _KEYWORD_SEARCH_WINDOW_MINUTES):
@@ -405,7 +409,15 @@ def poll_list():
             age_str = f"{age:.1f}" if age is not None else "no timestamp"
             logger.info(f"SKIPPING list tweet {tweet['id']} — too old ({age_str} min, max {_KEYWORD_SEARCH_WINDOW_MINUTES}min)")
             continue
-        # No relevance filter — the list is curated; engage with whatever the member is talking about
+        # Skip tweets that are replies in conversations we're not part of — Twitter 403s if we
+        # weren't @mentioned or haven't engaged in the thread.
+        if tweet.get("in_reply_to_tweet_id") and f"@{bot_handle_lower}" not in tweet.get("text", "").lower():
+            logger.debug(f"SKIPPING list tweet {tweet['id']} — reply thread, bot not mentioned")
+            continue
+        # Skip tweets with restricted reply settings — we'd get a 403 immediately.
+        if tweet.get("reply_settings", "everyone") != "everyone":
+            logger.debug(f"SKIPPING list tweet {tweet['id']} — reply_settings={tweet.get('reply_settings')}")
+            continue
         # Atomic claim — prevents race with concurrent poll_mentions on same tweet
         if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
             logger.debug(f"List tweet {tweet['id']} already claimed — skip")
@@ -413,8 +425,9 @@ def poll_list():
         _handle_tweet(tweet)
 
 
-# Static keywords for keyword search polling (cashtag variants are added dynamically from top tickers)
-_KEYWORD_SEARCH_STATIC = ["printr", "pob", "brrr", "belief"]
+# Static keywords for keyword search polling (cashtag variants are added dynamically from top tickers).
+# Keep these specific — generic words like "belief"/"pob" match K-pop/religious tweets and cause 403 spam.
+_KEYWORD_SEARCH_STATIC = ["printr", "brrr"]
 _KEYWORD_SEARCH_WINDOW_MINUTES = 5
 
 
@@ -432,11 +445,11 @@ def _build_keyword_query() -> str:
             terms.append(cashtag)
             seen_lower.add(cashtag.lower())
 
-    query = f"({' OR '.join(terms)}) -is:retweet -from:{bot_handle}"
+    query = f"({' OR '.join(terms)}) -is:retweet -is:reply -from:{bot_handle}"
     # Twitter v2 recent search has a 512-char query limit — trim tickers if needed
     while len(query) > 512 and terms:
         terms.pop()
-        query = f"({' OR '.join(terms)}) -is:retweet -from:{bot_handle}"
+        query = f"({' OR '.join(terms)}) -is:retweet -is:reply -from:{bot_handle}"
     return query
 
 
@@ -463,6 +476,10 @@ def poll_keyword_search():
     set_keyword_search_since_id(_keyword_search_since_id)
 
     for tweet in tweets:
+        # Skip tweets with restricted reply settings — we'd get a 403 immediately.
+        if tweet.get("reply_settings", "everyone") != "everyone":
+            logger.debug(f"SKIPPING keyword tweet {tweet['id']} — reply_settings={tweet.get('reply_settings')}")
+            continue
         if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
             logger.debug(f"Keyword tweet {tweet['id']} already claimed — skip")
             continue

@@ -271,7 +271,7 @@ def fetch_list_tweets(list_id: str) -> list[dict]:
     kwargs = {
         "id": list_id,
         "max_results": 100,
-        "tweet_fields": ["author_id", "created_at", "text", "referenced_tweets", "attachments"],
+        "tweet_fields": ["author_id", "created_at", "text", "referenced_tweets", "attachments", "reply_settings"],
         "expansions": ["author_id", "referenced_tweets.id", "attachments.media_keys"],
         "user_fields": ["username"],
         "media_fields": ["url", "type", "preview_image_url"],
@@ -304,6 +304,7 @@ def fetch_list_tweets(list_id: str) -> list[dict]:
                 "in_reply_to_tweet_id": in_reply_to_tweet_id,
                 "created_at": tweet.created_at,
                 "media_url": _extract_media_url(tweet, media_map),
+                "reply_settings": getattr(tweet, "reply_settings", "everyone") or "everyone",
             })
         return tweets
     except tweepy.TweepyException as e:
@@ -321,7 +322,7 @@ def search_keyword_tweets(
     kwargs: dict = {
         "query": query,
         "max_results": 100,
-        "tweet_fields": ["author_id", "created_at", "text", "referenced_tweets", "attachments"],
+        "tweet_fields": ["author_id", "created_at", "text", "referenced_tweets", "attachments", "reply_settings"],
         "expansions": ["author_id", "referenced_tweets.id", "attachments.media_keys"],
         "user_fields": ["username"],
         "media_fields": ["url", "type", "preview_image_url"],
@@ -358,6 +359,7 @@ def search_keyword_tweets(
                 "in_reply_to_tweet_id": in_reply_to_tweet_id,
                 "created_at": tweet.created_at,
                 "media_url": _extract_media_url(tweet, media_map),
+                "reply_settings": getattr(tweet, "reply_settings", "everyone") or "everyone",
             })
         return tweets
     except tweepy.TweepyException as e:
