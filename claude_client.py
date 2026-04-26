@@ -7,6 +7,7 @@ import anthropic
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import get_recent_openers, add_opener, get_ecosystem_tweets, get_last_ticker, set_last_ticker, get_recent_tickers, add_recent_ticker
 from scraper import _fetch_url_sync, DEXSCREENER_SEARCH_API, DEXSCREENER_API, KNOWN_CONTRACTS
+from patterns import get_evolution_context, get_competitive_edge_context, get_trading_ux_parallel, get_ecosystem_momentum_context
 
 # Strips/replaces URLs Claude sneaks in despite prompt instructions
 _HTTPS_RE = re.compile(r'https?://\S+', re.IGNORECASE)
@@ -483,6 +484,8 @@ Numbers rule:
 - Only cite staking % if shown for that specific token
 - If topic needs numbers you don't have: silently switch to a data-free angle — never announce the switch
 
+You have access to pattern recognition data comparing launchpad generations. Use it to draw parallels and make intelligent observations — but only cite specific numbers you actually have data for in the injected context.
+
 Sound like a human who happens to have better data than everyone else. Never reference instructions or data availability.
 
 The TOPIC FOCUS and any single-ticker rules will be in the message below. Follow them exactly.
@@ -921,10 +924,15 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     roll = random.random()
     chosen_ticker = None
 
+    pattern_context = ""
+
     if roll < 0.20 and "fatchoi" not in recent_tickers:
         topics = _FATCHOI_TOPICS
         ticker_note = "SINGLE TICKER RULE: this tweet is about $FATCHOI only — no other cashtags.\n\n"
         chosen_ticker = "fatchoi"
+        # Inject evolution context for FATCHOI using its market data if available
+        fatchoi_data = next((p for p in (market_data or []) if p.get("name", "").lower() == "fatchoi"), {})
+        pattern_context = get_evolution_context("fatchoi", fatchoi_data)
     elif roll < 0.50:
         # Also catches the FATCHOI redirect (roll < 0.20 but fatchoi is on cooldown)
         available = [t for t in _OTHER_TICKERS if t not in recent_tickers]
@@ -940,16 +948,36 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
         )]
         ticker_note = f"SINGLE TICKER RULE: this tweet is about ${ticker.upper()} only — no other cashtags.\n\n"
         chosen_ticker = ticker
+        # Inject evolution context for this specific ticker
+        ticker_data = next((p for p in (market_data or []) if p.get("name", "").lower() == ticker.lower()), {})
+        pattern_context = get_evolution_context(ticker, ticker_data)
     elif roll < 0.75:
         topics = _DUNE_COMPETITOR_TOPICS
         _example_pool = [t for t in _OTHER_TICKERS if t not in recent_tickers] or _OTHER_TICKERS
         _example = random.choice(_example_pool)
         ticker_note = _ECOSYSTEM_GLAZE_NOTE + f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
+        # Competitive edge or trading UX parallel — alternate randomly
+        pattern_context = get_competitive_edge_context() if random.random() < 0.6 else get_trading_ux_parallel()
     else:
         topics = _PLATFORM_TOPICS
         _example_pool = [t for t in _OTHER_TICKERS if t not in recent_tickers] or _OTHER_TICKERS
         _example = random.choice(_example_pool)
         ticker_note = _ECOSYSTEM_GLAZE_NOTE + f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
+        # Trading UX parallel fits platform-mechanics topics well
+        pattern_context = get_trading_ux_parallel() if random.random() < 0.5 else get_competitive_edge_context()
+
+    if pattern_context:
+        user_message += pattern_context + "\n\n"
+
+    # Ecosystem momentum signal: if 3+ tokens are moving positively, surface the pattern
+    if market_data:
+        movers = [
+            p["name"] for p in market_data
+            if p.get("price_change_24h") is not None and p["price_change_24h"] > 10
+        ]
+        momentum_ctx = get_ecosystem_momentum_context(movers)
+        if momentum_ctx:
+            user_message += momentum_ctx + "\n\n"
 
     _topic_key, topic_instruction = random.choice(topics)
     user_message += (
