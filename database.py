@@ -189,24 +189,6 @@ def is_reply_to_our_tweet(in_reply_to_tweet_id: str) -> bool:
         return row is not None
 
 
-def has_replied_to_author_in_chain(author_id: str, in_reply_to_tweet_id: str | None) -> bool:
-    """Returns True if we've already replied to this author AND the current tweet
-    is not a direct reply to one of our replies (i.e. they haven't responded to us)."""
-    if not author_id:
-        return False
-    with db() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM replied_tweets WHERE author_id = ? LIMIT 1",
-            (author_id,)
-        ).fetchone()
-        if not row:
-            return False
-    # We have replied to this author before.
-    # Only allow if their tweet is a direct reply to one of our replies.
-    if in_reply_to_tweet_id and is_reply_to_our_tweet(in_reply_to_tweet_id):
-        return False  # They replied back to us — allow the reply
-    return True  # We've replied before and they haven't responded to us
-
 
 def get_recent_replies(limit: int = 20):
     with db() as conn:

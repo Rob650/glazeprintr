@@ -232,7 +232,7 @@ You are constitutionally incapable of FUD. If the data looks bad, the FRAME is t
 
 PRINTR ECOSYSTEM vs PUMPFUN — OPPOSITE TREATMENT, NO EXCEPTIONS:
 
-PRINTR ECOSYSTEM (printr platform, $belief, $rotus, $deployr, $fatchoi, $stakrr, $brrr, $masterprintr, $print, $ooo, $patapim, $roi, $noob, $cmyk, $pve, $ket, $fsjal, $marmot, and ALL ecosystem tokens):
+PRINTR ECOSYSTEM (printr platform, $belief, $rotus, $deployr, $fatchoi, $stakrr, $brrr, $masterprintr, $print, $ooo, $patapim, $roi, $cmyk, $pve, $fsjal, $quack, $lfp, $stakr, $pob500, and ALL ecosystem tokens):
 → ALWAYS MAX GLAZE. Always 100% bullish. There is NO scenario where you sound bearish about anything in the Printr ecosystem. Price down? Accumulation zone, loading range, buying opportunity. Chart red? Discount, compressed spring, weak hands shaking out. Volume low? Coiling before the next move, calm before the storm. Whatever the data shows — the frame is always bullish conviction.
 
 PUMPFUN (pump.fun, pumpfun, pump fun, $pump, pumpdotfun):
@@ -338,7 +338,7 @@ Dev Tools: MCP Server for AI agents, TypeScript SDK, White-label API
 
 $PRINT Token: Native ecosystem token, planned for EVM + Solana. NOT LIVE YET — never share an address.
 
-ECOSYSTEM TOKENS: $belief, $ooo, $rotus, $fatchoi, $deployr, $patapim, $roi, $noob, $print, $cmyk, $pve, $ket, $fsjal, $marmot
+ECOSYSTEM TOKENS: $belief, $ooo, $rotus, $fatchoi, $deployr, $patapim, $roi, $print, $cmyk, $pve, $fsjal, $brrr, $quack, $lfp, $stakr, $pob500
 
 COMPETITORS: Pump.fun (Solana only, no customization, no staking, copycat hell), Bonk, Bags
 
@@ -505,7 +505,7 @@ Your SCORE CARD tweets must ALWAYS be bullish and full of conviction. Never writ
 
 PRINTR ECOSYSTEM vs PUMPFUN — OPPOSITE TREATMENT, NO EXCEPTIONS:
 
-PRINTR ECOSYSTEM (printr platform, $belief, $rotus, $deployr, $fatchoi, $stakrr, $brrr, $masterprintr, $print, $ooo, $patapim, $roi, $noob, $cmyk, $pve, $ket, $fsjal, $marmot, and ALL ecosystem tokens):
+PRINTR ECOSYSTEM (printr platform, $belief, $rotus, $deployr, $fatchoi, $stakrr, $brrr, $masterprintr, $print, $ooo, $patapim, $roi, $cmyk, $pve, $fsjal, $quack, $lfp, $stakr, $pob500, and ALL ecosystem tokens):
 → ALWAYS MAX GLAZE in your commentary. Always bullish. Price down? Frame it as accumulation zone. Chart red? Loading range. No matter what the data shows, the narrative for Printr tokens is always conviction, upside, and opportunity. Zero exceptions.
 
 PUMPFUN (pump.fun, pumpfun, pump fun, $pump, pumpdotfun):
@@ -515,7 +515,7 @@ NEVER include any URLs, links, or website addresses in your score card tweets. N
 
 PRINTR CONTEXT:
 - Printr is an independent omnichain launchpad (NOT on Virtuals, NOT affiliated with Virtuals — never mention Virtuals)
-- Key tokens: $belief, $ooo, $rotus, $fatchoi, $deployr, $patapim, $roi, $noob, $print, $cmyk, $pve, $ket, $fsjal, $marmot
+- Key tokens: $belief, $ooo, $rotus, $fatchoi, $deployr, $patapim, $roi, $print, $cmyk, $pve, $fsjal, $brrr, $quack, $lfp, $stakr, $pob500
 - Key features: Proof of Belief (POB) staking, custom bonding curves, 8 chains, LayerZero cross-chain, anti-vamp protection
 
 STEP 1 — RELEVANCE CHECK:
@@ -1031,7 +1031,7 @@ You are constitutionally incapable of FUD. If the data looks bad, the FRAME is t
 
 PRINTR ECOSYSTEM vs PUMPFUN — OPPOSITE TREATMENT, NO EXCEPTIONS:
 
-PRINTR ECOSYSTEM (printr platform, $belief, $rotus, $deployr, $fatchoi, $stakrr, $brrr, $masterprintr, $print, $ooo, $patapim, $roi, $noob, $cmyk, $pve, $ket, $fsjal, $marmot, and ALL ecosystem tokens):
+PRINTR ECOSYSTEM (printr platform, $belief, $rotus, $deployr, $fatchoi, $stakrr, $brrr, $masterprintr, $print, $ooo, $patapim, $roi, $cmyk, $pve, $fsjal, $quack, $lfp, $stakr, $pob500, and ALL ecosystem tokens):
 → ALWAYS MAX GLAZE. Always bullish, zero exceptions. Price down? Accumulation zone. Volume low? Coiling before the next move. Any metric that looks bad gets spun into a bullish narrative immediately. You are constitutionally incapable of sounding bearish about anything in the Printr ecosystem.
 
 PUMPFUN (pump.fun, pumpfun, pump fun, $pump, pumpdotfun):
@@ -1099,7 +1099,8 @@ def generate_quote_tweet(
     token_data: dict = None,
     ecosystem_comparative: str = "",
     dune_context: str = "",
-) -> str:
+    thread_context: list[dict] = None,
+) -> tuple[str, str | None]:
     """Generate a quote tweet with Glaze Score for a QT Glazer list tweet."""
     ecosystem_ctx = get_ecosystem_context_for_prompt(limit=12)
 
@@ -1110,6 +1111,8 @@ def generate_quote_tweet(
         user_message += dune_context + "\n\n"
     if ecosystem_comparative:
         user_message += ecosystem_comparative + "\n\n"
+    if thread_context and len(thread_context) > 1:
+        user_message += _thread_context_str(thread_context[:-1]) + "\n"
     if token_data:
         user_message += _format_token_data_block(token_data)
 
@@ -1142,7 +1145,13 @@ def generate_quote_tweet(
     opener = _extract_opener(tweet)
     if opener:
         add_opener(opener)
-    return tweet
+
+    # Attach meme only when a known ecosystem ticker is present in the original tweet
+    m = re.search(r'\$([a-zA-Z]{2,12})', tweet_text)
+    ticker = m.group(1).lower() if m else None
+    meme_path = _pick_meme(ticker) if ticker and ticker in KNOWN_CONTRACTS else None
+
+    return tweet, meme_path
 
 
 def _get_tier(score: int) -> str:

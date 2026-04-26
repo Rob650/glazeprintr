@@ -22,7 +22,7 @@ from database import (
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
     classify_tweet_intent, generate_quote_tweet,
-    _OTHER_TICKERS,
+    _OTHER_TICKERS, _pick_meme,
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
@@ -61,7 +61,8 @@ MAX_MENTION_AGE_MINUTES = 120
 
 ECOSYSTEM_TOKENS = [
     "belief", "ooo", "rotus", "fatchoi", "deployr", "patapim",
-    "roi", "noob", "print", "cmyk", "pve", "ket", "fsjal", "marmot",
+    "roi", "print", "cmyk", "pve", "fsjal",
+    "brrr", "quack", "lfp", "stakr", "pob500",
 ]
 
 _latest_projects: list[dict] = []
@@ -263,7 +264,8 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
         logger.error(f"Claude error for tweet {tweet['id']}: {e}")
         return
 
-    img_path = None  # image generation disabled
+    ticker = _extract_token(tweet_text)
+    img_path = _pick_meme(ticker) if ticker else None
 
     our_reply_id = None
     if DRY_RUN:
@@ -333,7 +335,7 @@ def score_tweet(tweet: dict, thread_context: list[dict] | None = None) -> bool:
     score, tier, score_card = result
 
     token_name = _extract_token(tweet_text, score_card)
-    img_path = None  # image generation disabled
+    img_path = _pick_meme(token_name) if token_name else None
 
     if DRY_RUN:
         logger.info(
@@ -676,82 +678,112 @@ def poll_qt_glazer_list():
 
     logger.info(f"QT Glazer: {len(tweets)} new tweet(s) after since_id filter")
 
-    bot_handle_lower = os.environ.get("BOT_HANDLE", "printrglazr").lower()
+    # Phase 1: collect eligible candidates (filter + atomic claim for dedup)
+    candidates: list[dict] = []
     for tweet in tweets:
         tweet_id = tweet["id"]
         tweet_text = tweet.get("text", "")
         author_handle = tweet.get("author_handle", "unknown").lower().lstrip("@")
 
-        # Skip our own tweets and known bot handles
         if author_handle in SKIP_HANDLES:
             logger.debug(f"QT skip: @{author_handle} is in SKIP_HANDLES")
             continue
-
-        # Skip retweets (native RTs show as "RT @...")
         if tweet_text.startswith("RT @"):
             logger.debug(f"QT skip {tweet_id}: retweet")
             continue
-
-        # Age gate
         if not _is_recent_tweet(tweet, _QT_GLAZER_WINDOW_MINUTES):
             age = _tweet_age_minutes(tweet)
             age_str = f"{age:.1f}" if age is not None else "no timestamp"
             logger.info(f"QT skip {tweet_id}: too old ({age_str} min, max {_QT_GLAZER_WINDOW_MINUTES})")
             continue
-
-        # Ecosystem relevance filter
         if not _is_qt_glazer_relevant(tweet_text):
             logger.info(f"QT skip {tweet_id}: not ecosystem-relevant — {tweet_text[:60]}")
             continue
-
-        # Atomic dedup claim
         if not try_claim_quote(tweet_id):
             logger.debug(f"QT skip {tweet_id}: already claimed")
             continue
+        candidates.append(tweet)
 
-        logger.info(f"QT Glazer: quoting @{author_handle} ({tweet_id}): {tweet_text[:80]}")
+    logger.info(f"QT Glazer: {len(candidates)} candidate(s) after filtering")
+    if not candidates:
+        return
 
-        token_data = None
+    # Phase 2: score all candidates with score_glaze() to find the best one
+    scored: list[tuple[int, dict, list | None]] = []
+    for tweet in candidates:
+        thread_context = _get_thread_context(tweet)
         try:
-            token_data = _get_tweet_token_data(tweet_text)
-            if token_data:
-                logger.info(f"QT token data: {token_data.get('name')} mc={token_data.get('market_cap')}")
-        except Exception as e:
-            logger.warning(f"QT token lookup failed for {tweet_id}: {e}")
-
-        try:
-            quote_text = generate_quote_tweet(
-                tweet_text,
-                author_handle,
-                token_data=token_data,
-                ecosystem_comparative=_latest_comparative_context,
-                dune_context=_latest_dune_context,
+            result = score_glaze(
+                tweet.get("text", ""),
+                tweet.get("author_handle", "unknown"),
+                thread_context=thread_context,
             )
+            score = result[0] if result is not None else 0
         except Exception as e:
-            logger.error(f"QT Claude error for {tweet_id}: {e}")
-            continue
+            logger.warning(f"QT scoring error for {tweet['id']}: {e}")
+            score = 0
+            thread_context = None
+        scored.append((score, tweet, thread_context))
 
-        qt_tweet_id = None
-        if DRY_RUN:
-            logger.info(f"[DRY RUN] QT Glazer @{author_handle}: {quote_text[:80]}...")
-        else:
-            qt_tweet_id = post_quote_tweet(quote_text, tweet_id)
-            if qt_tweet_id == QUOTE_TWEET_FORBIDDEN:
-                logger.warning(f"QT forbidden for {tweet_id}: Twitter rejected quote — skipping this tweet")
-                continue
-            if not qt_tweet_id:
-                logger.warning(f"QT post failed for {tweet_id}")
-                continue
-            logger.info(f"QT Glazer posted: {qt_tweet_id} — {quote_text[:60]}...")
+    scored.sort(key=lambda x: x[0], reverse=True)
+    best_score, best_tweet, best_thread_context = scored[0]
 
-        record_quote_tweet(
-            tweet_id=tweet_id,
-            author_handle=author_handle,
-            tweet_text=tweet_text,
-            quote_text=quote_text,
-            qt_tweet_id=qt_tweet_id,
-            dry_run=DRY_RUN,
+    tweet_id = best_tweet["id"]
+    tweet_text = best_tweet.get("text", "")
+    author_handle = best_tweet.get("author_handle", "unknown").lower().lstrip("@")
+    logger.info(
+        f"QT Glazer: winner score={best_score} @{author_handle} ({tweet_id}): {tweet_text[:80]}"
+    )
+
+    # Phase 3: generate and post quote tweet for the winner only
+    token_data = None
+    try:
+        token_data = _get_tweet_token_data(tweet_text)
+        if token_data:
+            logger.info(f"QT token data: {token_data.get('name')} mc={token_data.get('market_cap')}")
+    except Exception as e:
+        logger.warning(f"QT token lookup failed for {tweet_id}: {e}")
+
+    try:
+        quote_text, meme_path = generate_quote_tweet(
+            tweet_text,
+            author_handle,
+            token_data=token_data,
+            ecosystem_comparative=_latest_comparative_context,
+            dune_context=_latest_dune_context,
+            thread_context=best_thread_context,
         )
+    except Exception as e:
+        logger.error(f"QT Claude error for {tweet_id}: {e}")
+        return
+
+    qt_tweet_id = None
+    if DRY_RUN:
+        logger.info(
+            f"[DRY RUN] QT Glazer @{author_handle} score={best_score} "
+            f"meme={'yes' if meme_path else 'no'}: {quote_text[:80]}..."
+        )
+    else:
+        qt_tweet_id = post_quote_tweet(quote_text, tweet_id, media_path=meme_path)
+        if qt_tweet_id == QUOTE_TWEET_FORBIDDEN:
+            logger.warning(f"QT forbidden for {tweet_id}: Twitter rejected quote — skipping")
+            return
+        if not qt_tweet_id:
+            logger.warning(f"QT post failed for {tweet_id}")
+            return
+        logger.info(
+            f"QT Glazer posted: {qt_tweet_id} score={best_score} "
+            f"meme={'yes' if meme_path else 'no'} — {quote_text[:60]}..."
+        )
+
+    record_quote_tweet(
+        tweet_id=tweet_id,
+        author_handle=author_handle,
+        tweet_text=tweet_text,
+        quote_text=quote_text,
+        qt_tweet_id=qt_tweet_id,
+        dry_run=DRY_RUN,
+    )
 
 
 ECOSYSTEM_ACCOUNTS = ["masterprintr", "printr"]
@@ -796,8 +828,8 @@ async def refresh_top_tickers(max_attempts: int = 3):
             if projects:
                 _latest_projects = projects
                 # Extract and cache ecosystem-level context
-                _latest_dune_context = projects[0].pop("_dune_context", "") or ""
-                comp_stats = projects[0].pop("_comparative_stats", {}) or {}
+                _latest_dune_context = projects[0].get("_dune_context") or ""
+                comp_stats = projects[0].get("_comparative_stats") or {}
                 _latest_comparative_context = format_comparative_context(comp_stats)
                 top = _get_top_tickers(10)
                 logger.info(f"Top tickers updated: {', '.join(f'${t.upper()}' for t in top)}")
@@ -827,8 +859,8 @@ async def post_original_tweet():
         dune_ctx = ""
         comparative_ctx = ""
         if projects:
-            dune_ctx = projects[0].pop("_dune_context", "") or ""
-            comp_stats = projects[0].pop("_comparative_stats", {}) or {}
+            dune_ctx = projects[0].get("_dune_context") or ""
+            comp_stats = projects[0].get("_comparative_stats") or {}
             comparative_ctx = format_comparative_context(comp_stats)
             _latest_dune_context = dune_ctx
             _latest_comparative_context = comparative_ctx
