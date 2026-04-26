@@ -342,7 +342,7 @@ def score_tweet(tweet: dict, thread_context: list[dict] | None = None) -> bool:
         )
         record_score(tweet_id, author_handle, score, tier, score_card, None, dry_run=True)
     else:
-        quote_id = post_quote_tweet(score_card, tweet_id, media_path=img_path)
+        quote_id = post_quote_tweet(score_card, tweet_id, author_handle=author_handle, media_path=img_path)
         if not quote_id:
             logger.warning(f"Failed to post glaze score for @{author_handle} ({tweet_id})")
             return False
@@ -735,7 +735,7 @@ def poll_qt_glazer_list():
         if DRY_RUN:
             logger.info(f"[DRY RUN] QT Glazer @{author_handle}: {quote_text[:80]}...")
         else:
-            qt_tweet_id = post_quote_tweet(quote_text, tweet_id)
+            qt_tweet_id = post_quote_tweet(quote_text, tweet_id, author_handle=author_handle)
             if qt_tweet_id == QUOTE_TWEET_FORBIDDEN:
                 logger.warning(f"QT forbidden for {tweet_id}: Twitter rejected quote — skipping this tweet")
                 continue
