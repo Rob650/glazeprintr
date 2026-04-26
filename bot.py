@@ -476,9 +476,11 @@ def poll_keyword_search():
     set_keyword_search_since_id(_keyword_search_since_id)
 
     for tweet in tweets:
+        rs = tweet.get("reply_settings", "MISSING")
+        logger.info(f"Keyword tweet {tweet['id']} @{tweet.get('author_handle')} reply_settings={rs}: {tweet.get('text','')[:60]}")
         # Skip tweets with restricted reply settings — we'd get a 403 immediately.
-        if tweet.get("reply_settings", "everyone") != "everyone":
-            logger.debug(f"SKIPPING keyword tweet {tweet['id']} — reply_settings={tweet.get('reply_settings')}")
+        if rs != "everyone":
+            logger.info(f"SKIPPING keyword tweet {tweet['id']} — reply_settings={rs}")
             continue
         if not try_claim_mention(tweet["id"], tweet.get("author_id", "")):
             logger.debug(f"Keyword tweet {tweet['id']} already claimed — skip")
