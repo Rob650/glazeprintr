@@ -699,6 +699,12 @@ def poll_qt_glazer_list():
             logger.info(f"QT skip {tweet_id}: too old ({age_str} min, max {_QT_GLAZER_WINDOW_MINUTES})")
             continue
 
+        # Skip replies where bot isn't mentioned — Twitter forbids quoting reply threads
+        # we aren't part of (same 403 restriction as posting replies to unknown threads)
+        if tweet.get("in_reply_to_tweet_id") and f"@{bot_handle_lower}" not in tweet_text.lower():
+            logger.debug(f"QT skip {tweet_id}: reply thread, bot not mentioned")
+            continue
+
         # Ecosystem relevance filter
         if not _is_qt_glazer_relevant(tweet_text):
             logger.debug(f"QT skip {tweet_id}: not ecosystem-relevant — {tweet_text[:60]}")
