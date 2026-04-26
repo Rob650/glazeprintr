@@ -141,6 +141,7 @@ def init_db():
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('keyword_search_since_id', '');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('follower_search_since_id', '');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('qt_glazer_since_id', '');
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_ticker', '');
 
             CREATE TABLE IF NOT EXISTS qt_glazer_quotes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -505,6 +506,16 @@ def get_qt_glazer_since_id() -> str | None:
 
 def set_qt_glazer_since_id(since_id: str):
     set_state("qt_glazer_since_id", since_id)
+
+
+# --- last ticker (prevents back-to-back same ticker in original tweets) ---
+
+def get_last_ticker() -> str:
+    return get_state("last_ticker")
+
+
+def set_last_ticker(ticker: str):
+    set_state("last_ticker", ticker or "")
 
 
 # --- qt_glazer_quotes (dedup + record for QT Glazer list) ---

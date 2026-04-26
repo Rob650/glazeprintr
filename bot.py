@@ -22,6 +22,7 @@ from database import (
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
     classify_tweet_intent, generate_quote_tweet,
+    _OTHER_TICKERS,
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
@@ -74,13 +75,13 @@ _CONTRACT_RE = re.compile(
 # Core keywords — tweets matching any of these (or any cashtag, or any top-10 ticker) are engaged.
 _LIST_RELEVANCE_KEYWORDS = frozenset(["printr", "pob", "brrr", "belief"])
 
-# QT Glazer list — broader keyword set covering the full Printr/Fed ecosystem.
-_QT_GLAZER_KEYWORDS = frozenset([
-    "printr", "brrr", "belief", "rotus", "deployr", "fatchoi",
-    "stakrr", "masterprintr", "glaze", "glazeprintr", "staking",
-    "pob", "print", "noob", "cmyk", "patapim", "marmot", "fsjal", "ket",
-    "pve", "roi", "ooo", "prinaboratory", "quack", "lfp", "stakr", "pob500",
+# QT Glazer list — fixed platform/bot keywords plus every ticker in the rotation.
+# Adding a ticker to _OTHER_TICKERS in claude_client.py automatically makes it a QT keyword.
+_QT_GLAZER_FIXED = frozenset([
+    "printr", "fatchoi", "stakrr", "masterprintr", "glaze", "glazeprintr",
+    "staking", "pob", "noob", "marmot", "ket", "prinaboratory",
 ])
+_QT_GLAZER_KEYWORDS = _QT_GLAZER_FIXED | frozenset(_OTHER_TICKERS)
 _QT_GLAZER_WINDOW_MINUTES = 20  # wider window for 10-min poll interval
 
 _qt_glazer_since_id: str | None = None
@@ -847,15 +848,13 @@ async def post_original_tweet():
 
         memory_context = mem.get_memory_context()
         top_tickers = _get_top_tickers(10)
-        tweet_text = generate_original_tweet(
+        tweet_text, img_path = generate_original_tweet(
             market_data=projects,
             memory_context=memory_context,
             top_tickers=top_tickers,
             ecosystem_comparative=comparative_ctx,
             dune_context=dune_ctx,
         )
-
-        img_path = None  # image generation disabled
 
         if DRY_RUN:
             logger.info(f"[DRY RUN] Original tweet img={'yes' if img_path else 'no'}: {tweet_text}")
