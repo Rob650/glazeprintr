@@ -82,7 +82,7 @@ _QT_GLAZER_FIXED = frozenset([
     "staking", "pob", "noob", "marmot", "ket", "prinaboratory",
 ])
 _QT_GLAZER_KEYWORDS = _QT_GLAZER_FIXED | frozenset(_OTHER_TICKERS)
-_QT_GLAZER_WINDOW_MINUTES = 20  # wider window for 10-min poll interval
+_QT_GLAZER_WINDOW_MINUTES = 30  # wider window for 10-min poll interval
 
 _qt_glazer_since_id: str | None = None
 _qt_glazer_since_id_loaded: bool = False
@@ -704,12 +704,12 @@ def poll_qt_glazer_list():
         # so also catch tweets whose text opens with @ (conversational @ tweets).
         is_reply = bool(tweet.get("in_reply_to_tweet_id")) or tweet_text.lstrip().startswith("@")
         if is_reply and f"@{bot_handle_lower}" not in tweet_text.lower():
-            logger.debug(f"QT skip {tweet_id}: reply/@ thread, bot not mentioned")
+            logger.info(f"QT skip {tweet_id}: reply/@ thread, bot not mentioned")
             continue
 
         # Ecosystem relevance filter
         if not _is_qt_glazer_relevant(tweet_text):
-            logger.debug(f"QT skip {tweet_id}: not ecosystem-relevant — {tweet_text[:60]}")
+            logger.info(f"QT skip {tweet_id}: not ecosystem-relevant — {tweet_text[:60]}")
             continue
 
         # Atomic dedup claim
