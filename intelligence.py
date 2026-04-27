@@ -1,6 +1,8 @@
 """
 GlazePrintr ecosystem intelligence layer.
 
+get_optimal_interval() is also exported for time-based posting optimization.
+
 Scores and ranks all 16 ecosystem tokens by a composite heat score,
 detects movers (pump/dump/volume anomaly/ATH/breakout), maintains an
 ecosystem health dashboard, injects macro context into tweet generation,
@@ -12,6 +14,7 @@ Refresh cycle: every 15 minutes via APScheduler (see main.py).
 import logging
 import random
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -444,6 +447,23 @@ async def refresh_intelligence(
 def get_intelligence() -> Optional[EcosystemIntelligence]:
     """Return the cached snapshot, or None if not yet built."""
     return _cached_intelligence
+
+
+def get_optimal_interval() -> int:
+    """Return the optimal posting interval in minutes based on current UTC time.
+
+    Peak CT hours post every 45 min; dead hours back off to 90 min.
+    Peak windows (UTC): 13:00–15:00 (9–11am EST) and 23:00–02:00 (7–10pm EST).
+    Off-peak: 09:00–13:00 UTC (4–9am EST).
+    """
+    hour = datetime.now(timezone.utc).hour
+    # Peak: 9–11am EST = 13:00–15:00 UTC; 7–10pm EST = 23:00–02:00 UTC
+    if 13 <= hour < 15 or hour >= 23 or hour < 2:
+        return 45
+    # Off-peak: 4–9am EST = 09:00–13:00 UTC
+    if 9 <= hour < 13:
+        return 90
+    return 60
 
 
 def get_keyword_weights() -> dict[str, list[str]]:
