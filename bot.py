@@ -26,6 +26,7 @@ from database import (
     set_last_correlation_tweet_time, record_staking_snapshot,
     get_last_staking_tweet_time, set_last_staking_tweet_time,
     get_untweeted_burns, mark_burn_tweeted, count_burn_tweets_last_hour,
+    recently_tweeted_about_token,
 )
 import launch_detector
 from claude_client import (
@@ -969,6 +970,11 @@ def poll_whale_activity():
         action = tx["action"]
         amount_usd = tx["amount_usd"]
 
+        if recently_tweeted_about_token(ticker):
+            logger.info(f"Skipping whale tweet for ${ticker.upper()} — recently covered by another feature")
+            mark_whale_transaction_tweeted(tx["id"])
+            continue
+
         proj_data = next(
             (p for p in _latest_projects if p.get("name", "").lower() == ticker.lower()),
             {}
@@ -1040,12 +1046,17 @@ async def poll_burn_events():
         ticker = burn["ticker"]
         burned_amount = burn["burned_amount"]
 
+        if recently_tweeted_about_token(ticker):
+            logger.info(f"Skipping burn tweet for ${ticker.upper()} — recently covered by another feature")
+            mark_burn_tweeted(burn["id"])
+            continue
+
         # Only tweet significant burns (estimate USD value from cached price data)
         burned_usd = 0.0
         token_metrics = _get_token_metrics(ticker)
         if token_metrics and token_metrics.get("price") and burned_amount > 0:
             burned_usd = token_metrics["price"] * burned_amount
-        if 0 < burned_usd < _BURN_MIN_USD:
+        if burned_usd < _BURN_MIN_USD:
             logger.info(
                 f"Skipping burn for ${ticker.upper()} — est. ${burned_usd:.2f} < ${_BURN_MIN_USD} threshold"
             )
