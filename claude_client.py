@@ -1154,6 +1154,7 @@ def generate_quote_tweet(
     ecosystem_comparative: str = "",
     dune_context: str = "",
     thread_context: list[dict] = None,
+    sentiment: str = "neutral",
 ) -> tuple[str, str | None]:
     """Generate a quote tweet with Glaze Score for a QT Glazer list tweet."""
     ecosystem_ctx = get_ecosystem_context_for_prompt(limit=12)
@@ -1165,6 +1166,11 @@ def generate_quote_tweet(
         user_message += dune_context + "\n\n"
     if ecosystem_comparative:
         user_message += ecosystem_comparative + "\n\n"
+
+    tone_instruction = _sentiment_tone_instruction(sentiment)
+    if tone_instruction:
+        user_message += tone_instruction + "\n\n"
+
     if thread_context and len(thread_context) > 1:
         user_message += _thread_context_str(thread_context[:-1]) + "\n"
     if token_data:
@@ -1223,6 +1229,68 @@ def _get_tier(score: int) -> str:
     if score <= 80:
         return "Heavy Glazer"
     return "MAXIMUM GLAZE"
+
+
+_BULLISH_KW = frozenset(["moon", "pump", "lfg", "bullish", "undervalued", "accumulate", "buy",
+                         "gem", "alpha", "aping", "wagmi", "print", "brrr", "lfp", "loading",
+                         "bags", "stacking", "conviction", "locked", "locking", "hodl", "hold"])
+_BEARISH_KW = frozenset(["dump", "rug", "dead", "sell", "overvalued", "exit", "ngmi",
+                         "rekt", "bearish", "crashing", "dying", "zero", "scam", "cooked"])
+_CONCERNED_KW = frozenset(["worried", "concern", "careful", "warning", "risky", "danger",
+                            "sus", "sketchy", "fud", "careful", "caution"])
+_EXCITED_KW = frozenset(["omg", "wow", "incredible", "insane", "unreal", "fire", "lit",
+                         "banger", "deranged", "unhinged", "crazy", "massive", "huge"])
+
+
+def score_sentiment(tweet_text: str) -> str:
+    """
+    Return sentiment label for a tweet: bullish | bearish | neutral | concerned | excited.
+    Uses keyword heuristics first; falls back to Claude for ambiguous cases when
+    ENABLE_SENTIMENT_SCORING is true.
+    """
+    lower = tweet_text.lower()
+    words = frozenset(re.findall(r'\b\w+\b', lower))
+
+    bullish = len(words & _BULLISH_KW)
+    bearish = len(words & _BEARISH_KW)
+    concerned = len(words & _CONCERNED_KW)
+    excited = len(words & _EXCITED_KW)
+
+    if bullish >= 2 and bullish > bearish:
+        return "bullish"
+    if bearish >= 2 and bearish > bullish:
+        return "bearish"
+    if concerned >= 1 and bearish >= 1:
+        return "concerned"
+    if excited >= 2 and bullish >= excited:
+        return "excited"
+
+    if os.environ.get("ENABLE_SENTIMENT_SCORING", "false").lower() == "true":
+        try:
+            result = _call_claude(
+                "Classify the crypto tweet sentiment with exactly one word: bullish, bearish, neutral, concerned, or excited. No explanation.",
+                f'Tweet: "{tweet_text}"',
+                max_tokens=5,
+            ).strip().lower()
+            for s in ("bullish", "bearish", "neutral", "concerned", "excited"):
+                if s in result:
+                    return s
+        except Exception:
+            pass
+
+    return "neutral"
+
+
+def _sentiment_tone_instruction(sentiment: str) -> str:
+    if sentiment == "bullish":
+        return "TONE MATCH: Author is bullish — amplify their conviction with data backing. Match their energy, then raise it."
+    if sentiment == "bearish":
+        return "TONE MATCH: Author is bearish — acknowledge their concern, then counter with on-chain receipts. Don't dismiss; outdata them."
+    if sentiment == "concerned":
+        return "TONE MATCH: Author has concerns — validate the question, pivot to Printr's structural protections (anti-vamp, creator staking, LP auto-lock) as the answer."
+    if sentiment == "excited":
+        return "TONE MATCH: Author is hyped — match their derangement level. Maximum energy, data-backed."
+    return ""
 
 
 _CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
