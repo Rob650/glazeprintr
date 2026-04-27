@@ -841,7 +841,7 @@ def poll_qt_glazer_list():
             logger.warning(f"QT sentiment scoring failed for {tweet_id}: {e}")
 
     try:
-        quote_text, _ = generate_quote_tweet(
+        quote_text, meme_path = generate_quote_tweet(
             tweet_text,
             author_handle,
             token_data=token_data,
@@ -857,7 +857,7 @@ def poll_qt_glazer_list():
     if DRY_RUN:
         logger.info(f"[DRY RUN] QT Glazer @{author_handle} score={best_score}: {quote_text[:80]}...")
     else:
-        qt_tweet_id = post_quote_tweet(quote_text, tweet_id, author_handle=author_handle)
+        qt_tweet_id = post_quote_tweet(quote_text, tweet_id, author_handle=author_handle, media_path=meme_path)
         if qt_tweet_id == QUOTE_TWEET_FORBIDDEN:
             logger.warning(f"QT forbidden for {tweet_id}: Twitter rejected quote — skipping")
             return
@@ -914,15 +914,16 @@ async def poll_new_launches():
             logger.error(f"Launch alert generation failed for ${ticker.upper()}: {e}")
             continue
 
+        img_path = _pick_meme(ticker)
         if DRY_RUN:
-            logger.info(f"[DRY RUN] Launch alert ${ticker.upper()}: {tweet_text[:100]}...")
+            logger.info(f"[DRY RUN] Launch alert ${ticker.upper()} img={'yes' if img_path else 'no'}: {tweet_text[:100]}...")
             mark_launch_tweeted(contract)
         else:
-            tweet_id = post_tweet(tweet_text)
+            tweet_id = post_tweet(tweet_text, media_path=img_path)
             if not tweet_id:
                 logger.warning(f"Launch alert post failed for ${ticker.upper()}")
                 continue
-            logger.info(f"Launch alert posted: ${ticker.upper()} tweet_id={tweet_id}")
+            logger.info(f"Launch alert posted: ${ticker.upper()} img={'yes' if img_path else 'no'} tweet_id={tweet_id}")
             mark_launch_tweeted(contract)
 
         alerts_this_hour += 1
@@ -1001,14 +1002,15 @@ def poll_whale_activity():
             mark_whale_transaction_tweeted(tx["id"])
             continue
 
+        img_path = _pick_meme(ticker)
         if DRY_RUN:
-            logger.info(f"[DRY RUN] Whale tweet ${ticker.upper()} {action} ${amount_usd:,.0f}: {tweet_text[:100]}...")
+            logger.info(f"[DRY RUN] Whale tweet ${ticker.upper()} {action} ${amount_usd:,.0f} img={'yes' if img_path else 'no'}: {tweet_text[:100]}...")
         else:
-            tweet_id = post_tweet(tweet_text)
+            tweet_id = post_tweet(tweet_text, media_path=img_path)
             if not tweet_id:
                 logger.warning(f"Whale tweet post failed for ${ticker.upper()}")
                 continue
-            logger.info(f"Whale alert posted: ${ticker.upper()} {action} ${amount_usd:,.0f} tweet_id={tweet_id}")
+            logger.info(f"Whale alert posted: ${ticker.upper()} {action} ${amount_usd:,.0f} img={'yes' if img_path else 'no'} tweet_id={tweet_id}")
 
         mark_whale_transaction_tweeted(tx["id"])
 
@@ -1073,17 +1075,18 @@ async def poll_burn_events():
             mark_burn_tweeted(burn["id"])
             continue
 
+        img_path = _pick_meme(ticker)
         if DRY_RUN:
             logger.info(
-                f"[DRY RUN] Burn tweet ${ticker.upper()} burned={burned_amount:,.0f}: {tweet_text[:100]}..."
+                f"[DRY RUN] Burn tweet ${ticker.upper()} burned={burned_amount:,.0f} img={'yes' if img_path else 'no'}: {tweet_text[:100]}..."
             )
         else:
-            tweet_id = post_tweet(tweet_text)
+            tweet_id = post_tweet(tweet_text, media_path=img_path)
             if not tweet_id:
                 logger.warning(f"Burn tweet post failed for ${ticker.upper()}")
                 continue
             logger.info(
-                f"Burn alert posted: ${ticker.upper()} burned={burned_amount:,.0f} tweet_id={tweet_id}"
+                f"Burn alert posted: ${ticker.upper()} burned={burned_amount:,.0f} img={'yes' if img_path else 'no'} tweet_id={tweet_id}"
             )
 
         mark_burn_tweeted(burn["id"])
@@ -1270,14 +1273,15 @@ async def post_original_tweet():
                     f"— generating 3-tweet thread"
                 )
                 thread_tweets = generate_thread_tweets(mover, intel_ctx)
+                thread_img_path = _pick_meme(ticker)
                 posted_hour = datetime.now(timezone.utc).hour
                 if DRY_RUN:
-                    logger.info(f"[DRY RUN] Thread for ${ticker.upper()}:")
+                    logger.info(f"[DRY RUN] Thread for ${ticker.upper()} img={'yes' if thread_img_path else 'no'}:")
                     for i, t in enumerate(thread_tweets, 1):
                         logger.info(f"  [{i}/3] {t}")
                     record_thread_post("dry_run", ticker, "big_mover", dry_run=True)
                 else:
-                    first_tweet_id = post_thread(thread_tweets)
+                    first_tweet_id = post_thread(thread_tweets, media_path=thread_img_path)
                     if first_tweet_id:
                         record_thread_post(first_tweet_id, ticker, "big_mover", dry_run=False)
                         record_tweet_performance(first_tweet_id, posted_hour)
@@ -1353,14 +1357,18 @@ async def check_correlations():
     tokens_json = json.dumps([t["ticker"] for t in event.get("tokens_involved", [])])
     event_id = record_correlation_event(event["event_type"], tokens_json, event["magnitude"])
 
+    tokens_involved = event.get("tokens_involved", [])
+    top_ticker = max(tokens_involved, key=lambda t: t["change"])["ticker"].lower() if tokens_involved else None
+    img_path = _pick_meme(top_ticker) if top_ticker else None
+
     if DRY_RUN:
-        logger.info(f"[DRY RUN] Correlation tweet ({event['event_type']}): {tweet_text[:100]}...")
+        logger.info(f"[DRY RUN] Correlation tweet ({event['event_type']}) img={'yes' if img_path else 'no'}: {tweet_text[:100]}...")
     else:
-        tweet_id = post_tweet(tweet_text)
+        tweet_id = post_tweet(tweet_text, media_path=img_path)
         if not tweet_id:
             logger.warning("Failed to post correlation tweet")
             return
-        logger.info(f"Correlation tweet posted: {event['event_type']} tweet_id={tweet_id}")
+        logger.info(f"Correlation tweet posted: {event['event_type']} img={'yes' if img_path else 'no'} tweet_id={tweet_id}")
 
     mark_correlation_tweeted(event_id)
     set_last_correlation_tweet_time()
@@ -1413,14 +1421,17 @@ async def post_staking_update():
         except Exception as e:
             logger.warning(f"Failed to record staking snapshot for {entry['ticker']}: {e}")
 
+    top_ticker = leaderboard[0]["ticker"].lower()
+    img_path = _pick_meme(top_ticker)
+
     if DRY_RUN:
-        logger.info(f"[DRY RUN] Staking tweet: {tweet_text[:100]}...")
+        logger.info(f"[DRY RUN] Staking tweet img={'yes' if img_path else 'no'}: {tweet_text[:100]}...")
     else:
-        tweet_id = post_tweet(tweet_text)
+        tweet_id = post_tweet(tweet_text, media_path=img_path)
         if not tweet_id:
             logger.warning("Failed to post staking tweet")
             return
-        logger.info(f"Staking tweet posted: tweet_id={tweet_id}")
+        logger.info(f"Staking tweet posted: img={'yes' if img_path else 'no'} tweet_id={tweet_id}")
 
     set_last_staking_tweet_time()
 

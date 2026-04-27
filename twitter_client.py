@@ -242,11 +242,11 @@ def post_tweet(text: str, media_path: str | None = None) -> str | None:
         return None
 
 
-def post_thread(tweets: list[str]) -> str | None:
+def post_thread(tweets: list[str], media_path: str | None = None) -> str | None:
     """Post a list of tweet texts as a thread. Returns the first tweet's ID, or None on failure."""
     if not tweets:
         return None
-    first_id = post_tweet(tweets[0])
+    first_id = post_tweet(tweets[0], media_path=media_path)
     if not first_id:
         logger.warning("post_thread: failed to post opening tweet — aborting thread")
         return None
