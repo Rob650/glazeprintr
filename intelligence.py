@@ -29,12 +29,13 @@ ECOSYSTEM_TOKENS = [
 
 # ── Heat score component weights (must sum to 1.0) ───────────────────────────
 
-_W_MOMENTUM_1H  = 0.35
+_W_MOMENTUM_1H  = 0.25
 _W_MOMENTUM_6H  = 0.20
 _W_MOMENTUM_24H = 0.15
 _W_VOLUME_SURGE = 0.15
 _W_STAKING      = 0.08
 _W_LIQUIDITY    = 0.07
+_W_BUY_PRESSURE = 0.10
 
 # ── Mover detection thresholds ───────────────────────────────────────────────
 
@@ -156,11 +157,25 @@ class EcosystemIntelligence:
         liq       = token.get("liquidity") or 0.0
         liq_score = min(liq / 50_000.0, 1.0) * 100.0
 
+        # Buy pressure — bullish when >50% buys, penalised when sell-dominant
+        buys_24h  = token.get("buys_24h")  or 0
+        sells_24h = token.get("sells_24h") or 0
+        total_txns = buys_24h + sells_24h
+        if total_txns > 0:
+            buy_ratio = buys_24h / total_txns
+            if buy_ratio > 0.5:
+                buy_pressure_score = min(buy_ratio * 100, 100.0)
+            else:
+                buy_pressure_score = max(0.0, buy_ratio * 100 - 20)
+        else:
+            buy_pressure_score = 50.0  # neutral when no data
+
         score = (
             momentum_score * momentum_sum
-            + vol_score    * _W_VOLUME_SURGE
-            + staking_score * _W_STAKING
-            + liq_score    * _W_LIQUIDITY
+            + vol_score          * _W_VOLUME_SURGE
+            + staking_score      * _W_STAKING
+            + liq_score          * _W_LIQUIDITY
+            + buy_pressure_score * _W_BUY_PRESSURE
         )
         return max(0.0, min(100.0, score))
 
@@ -230,13 +245,6 @@ class EcosystemIntelligence:
         momentum_score = max(0.0, min(100.0, 50.0 + weighted_mom))
         trending = "up" if weighted_mom > 5 else "down" if weighted_mom < -5 else "flat"
 
-        # Average holder count (proxy for community size)
-        holders_data = [p for p in projects if p.get("holder_count")]
-        avg_holders = (
-            sum(p["holder_count"] for p in holders_data) / len(holders_data)
-            if holders_data else 0.0
-        )
-
         self.health = {
             "total_mc": total_mc,
             "total_vol_24h": total_vol,
@@ -244,7 +252,6 @@ class EcosystemIntelligence:
             "tracked_token_count": len(projects),
             "total_staked_usd": total_staked_usd,
             "avg_staking_pct": avg_staking,
-            "avg_holder_count": avg_holders,
             "ecosystem_momentum_score": round(momentum_score, 1),
             "ecosystem_trending": trending,
             "timestamp": self.timestamp,
@@ -326,10 +333,15 @@ class EcosystemIntelligence:
                 mc      = t.get("market_cap") or 0
                 mc_str  = f"${mc/1e6:.2f}M" if mc >= 1e6 else f"${mc:,.0f}"
                 vol_1h  = t.get("volume_1h")
+                buys_24  = t.get("buys_24h") or 0
+                sells_24 = t.get("sells_24h") or 0
                 line = f"  ${name} [heat={heat:.0f}/100, {flags}] MC={mc_str}"
                 if chg_1h  is not None: line += f" 1h:{chg_1h:+.1f}%"
                 if chg_24h is not None: line += f" 24h:{chg_24h:+.1f}%"
                 if vol_1h:              line += f" vol1h:${vol_1h:,.0f}"
+                if buys_24 + sells_24 > 0:
+                    buy_pct = buys_24 / (buys_24 + sells_24) * 100
+                    line += f" buy%:{buy_pct:.0f}%"
                 lines.append(line)
 
         # ── Top by heat score (excluding movers already listed) ──

@@ -20,7 +20,9 @@ from database import (
     get_qt_glazer_since_id, set_qt_glazer_since_id,
     count_launch_alerts_last_hour, get_untweeted_launches, mark_launch_tweeted,
     get_untweeted_whale_transactions, mark_whale_transaction_tweeted, count_whale_tweets_last_hour,
+    get_untweeted_burn_events, mark_burn_event_tweeted, count_burn_tweets_last_hour,
     record_thread_post, count_threads_today, record_tweet_performance,
+    recently_tweeted_about_token,
 )
 import launch_detector
 from claude_client import (
@@ -50,6 +52,8 @@ ENABLE_SENTIMENT_SCORING = os.environ.get("ENABLE_SENTIMENT_SCORING", "false").l
 ENABLE_COMPETITOR_DATA = os.environ.get("ENABLE_COMPETITOR_DATA", "false").lower() == "true"
 MAX_LAUNCH_ALERTS_PER_HOUR = 2
 MAX_WHALE_TWEETS_PER_HOUR = 3
+MAX_BURN_TWEETS_PER_HOUR = 2
+_BURN_MIN_USD = 100.0  # skip burns where USD value can't be confirmed ≥ $100
 ENABLE_THREAD_MODE = os.environ.get("ENABLE_THREAD_MODE", "false").lower() == "true"
 MAX_THREADS_PER_DAY = 2
 _THREAD_HEAT_THRESHOLD = 85.0
@@ -931,13 +935,21 @@ def poll_whale_activity():
         action = tx["action"]
         amount_usd = tx["amount_usd"]
 
+        # Cross-feature cooldown: skip if this token was recently covered by another feature
+        if recently_tweeted_about_token(ticker, window_hours=2):
+            logger.info(f"Skipping whale alert for ${ticker.upper()}: recently covered by another feature")
+            mark_whale_transaction_tweeted(tx["id"])
+            continue
+
+        dominance = "buy-dominant" if action == "BUY" else "sell-dominant"
         context = (
-            f"WHALE ALERT — ${ticker.upper()}:\n"
-            f"  Action: {action} (large wallet activity detected)\n"
-            f"  1h volume: ${amount_usd:,.0f}\n"
-            f"Generate a tweet about this whale activity. "
-            f"Example: 'Top ${ticker.upper()} wallet just {'moved in' if action == 'BUY' else 'moved out'} "
-            f"${amount_usd:,.0f}. {'Holders accumulating' if action == 'BUY' else 'Smart money rotating'} — watch closely.' "
+            f"VOLUME ANOMALY — ${ticker.upper()}:\n"
+            f"  Signal: anomalous volume spike — {dominance} activity detected\n"
+            f"  1h volume: ${amount_usd:,.0f} (well above hourly average)\n"
+            f"Generate a tweet about this volume anomaly. "
+            f"Be honest: this is unusual {'buying' if action == 'BUY' else 'selling'} activity, not a confirmed single wallet. "
+            f"Example: '${ticker.upper()} seeing anomalous {'buy' if action == 'BUY' else 'sell'} pressure — "
+            f"${amount_usd:,.0f} in the last hour.' "
             f"Be specific with the dollar amount. {'Bullish spin.' if action == 'BUY' else 'Neutral-observational.'} "
             f"Max 240 chars. No URLs. Glaze vocab mandatory. Reply ONLY with the tweet text."
         )
@@ -960,6 +972,83 @@ def poll_whale_activity():
             logger.info(f"Whale alert posted: ${ticker.upper()} {action} ${amount_usd:,.0f} tweet_id={tweet_id}")
 
         mark_whale_transaction_tweeted(tx["id"])
+
+
+ENABLE_BURN_TRACKING = os.environ.get("ENABLE_BURN_TRACKING", "false").lower() == "true"
+
+
+def poll_burn_events():
+    """Check for significant token burn events and post alert tweets. No-op when flag is off."""
+    if not ENABLE_BURN_TRACKING:
+        return
+
+    if is_paused():
+        logger.info("Bot paused — skipping burn events poll")
+        return
+
+    burn_tweets_this_hour = count_burn_tweets_last_hour()
+    if burn_tweets_this_hour >= MAX_BURN_TWEETS_PER_HOUR:
+        logger.info(f"Burn tweet rate limit reached ({burn_tweets_this_hour}/{MAX_BURN_TWEETS_PER_HOUR}/hr) — skipping")
+        return
+
+    untweeted = get_untweeted_burn_events(hours=2)
+    if not untweeted:
+        logger.info("No untweeted burn events to post")
+        return
+
+    from claude_client import _call_claude, SYSTEM_PROMPT_BASE
+
+    for event in untweeted:
+        if count_burn_tweets_last_hour() >= MAX_BURN_TWEETS_PER_HOUR:
+            logger.info("Burn tweet rate limit reached mid-batch — stopping")
+            break
+
+        ticker = event["ticker"]
+        burned_usd = event.get("burned_usd") or 0.0
+        burned_amount = event.get("burned_amount") or 0.0
+
+        # Skip if we can't confirm the burn meets the minimum USD threshold.
+        # burned_usd=0 means price data was unavailable — don't publish unverified burns.
+        if burned_usd < _BURN_MIN_USD:
+            logger.info(
+                f"Skipping burn event for ${ticker.upper()}: burned_usd={burned_usd:.2f} < ${_BURN_MIN_USD:.0f} threshold"
+            )
+            mark_burn_event_tweeted(event["id"])
+            continue
+
+        # Cross-feature cooldown: skip if we already tweeted about this token recently
+        if recently_tweeted_about_token(ticker, window_hours=2):
+            logger.info(f"Skipping burn event for ${ticker.upper()}: recently covered by another feature")
+            mark_burn_event_tweeted(event["id"])
+            continue
+
+        context = (
+            f"BURN EVENT — ${ticker.upper()}:\n"
+            f"  Burned: {burned_amount:,.0f} tokens (≈${burned_usd:,.0f} USD)\n"
+            f"Generate a tweet about this token burn. "
+            f"Bullish spin: deflationary pressure, supply reduction, conviction signal. "
+            f"Max 240 chars. No URLs. Glaze vocab mandatory. Reply ONLY with the tweet text."
+        )
+
+        try:
+            from claude_client import _call_claude, SYSTEM_PROMPT_BASE
+            tweet_text = _call_claude(SYSTEM_PROMPT_BASE, context, max_tokens=150)
+            tweet_text = tweet_text.strip()[:280]
+        except Exception as e:
+            logger.error(f"Burn tweet generation failed for ${ticker.upper()}: {e}")
+            mark_burn_event_tweeted(event["id"])
+            continue
+
+        if DRY_RUN:
+            logger.info(f"[DRY RUN] Burn tweet ${ticker.upper()} ${burned_usd:,.0f}: {tweet_text[:100]}...")
+        else:
+            tweet_id = post_tweet(tweet_text)
+            if not tweet_id:
+                logger.warning(f"Burn tweet post failed for ${ticker.upper()}")
+                continue
+            logger.info(f"Burn alert posted: ${ticker.upper()} ${burned_usd:,.0f} tweet_id={tweet_id}")
+
+        mark_burn_event_tweeted(event["id"])
 
 
 ECOSYSTEM_ACCOUNTS = ["masterprintr", "printr"]
