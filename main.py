@@ -25,6 +25,11 @@ ENABLE_LAUNCH_DETECTION = os.environ.get("ENABLE_LAUNCH_DETECTION", "false").low
 ENABLE_WHALE_TRACKING = os.environ.get("ENABLE_WHALE_TRACKING", "false").lower() == "true"
 ENABLE_COMPETITOR_DATA = os.environ.get("ENABLE_COMPETITOR_DATA", "false").lower() == "true"
 ENABLE_TIME_OPTIMIZATION = os.environ.get("ENABLE_TIME_OPTIMIZATION", "false").lower() == "true"
+ENABLE_CORRELATION_TWEETS = os.environ.get("ENABLE_CORRELATION_TWEETS", "false").lower() == "true"
+ENABLE_STAKING_TWEETS = os.environ.get("ENABLE_STAKING_TWEETS", "false").lower() == "true"
+ENABLE_BURN_TRACKING = os.environ.get("ENABLE_BURN_TRACKING", "false").lower() == "true"
+ENABLE_REWARDS_DATA = os.environ.get("ENABLE_REWARDS_DATA", "false").lower() == "true"
+ENABLE_LAUNCH_GUIDE = os.environ.get("ENABLE_LAUNCH_GUIDE", "false").lower() == "true"
 
 scheduler = AsyncIOScheduler()
 
@@ -100,16 +105,32 @@ async def lifespan(app: FastAPI):
         from competitor_tracker import refresh_competitor_stats
         scheduler.add_job(refresh_competitor_stats, "interval", hours=2, id="competitor_refresher", replace_existing=True,
                           max_instances=1, coalesce=True, misfire_grace_time=300, next_run_time=_now)
+    if ENABLE_CORRELATION_TWEETS:
+        scheduler.add_job(bot.check_correlations, "interval", minutes=15, id="correlation_checker", replace_existing=True,
+                          max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    if ENABLE_STAKING_TWEETS:
+        scheduler.add_job(bot.post_staking_update, "interval", hours=12, id="staking_updater", replace_existing=True,
+                          max_instances=1, coalesce=True, misfire_grace_time=300, next_run_time=_now)
+    if ENABLE_BURN_TRACKING:
+        scheduler.add_job(bot.poll_burn_events, "interval", minutes=30, id="burn_tracker", replace_existing=True,
+                          max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.start()
     launch_detection_status = "launch detection (10 min)" if ENABLE_LAUNCH_DETECTION else "launch detection DISABLED"
     whale_status = "whale tracking (15 min)" if ENABLE_WHALE_TRACKING else "whale tracking DISABLED"
     competitor_status = "competitor stats (2h)" if ENABLE_COMPETITOR_DATA else "competitor stats DISABLED"
+    burn_status = "burn tracking (30 min)" if ENABLE_BURN_TRACKING else "burn tracking DISABLED"
+    rewards_status = "rewards data ON" if ENABLE_REWARDS_DATA else "rewards data DISABLED"
+    launch_guide_status = "launch guide ON" if ENABLE_LAUNCH_GUIDE else "launch guide DISABLED"
     time_opt_status = "time optimization ON (dynamic interval 45/60/90 min)" if ENABLE_TIME_OPTIMIZATION else "fixed 60 min interval"
     thread_mode_status = "thread mode ON" if bot.ENABLE_THREAD_MODE else "thread mode DISABLED"
+    correlation_status = "correlation tweets (15 min)" if ENABLE_CORRELATION_TWEETS else "correlation tweets DISABLED"
+    staking_status = "staking tweets (12h)" if ENABLE_STAKING_TWEETS else "staking tweets DISABLED"
     logger.info(
         f"Schedulers started: mentions (5 min), QT glazer (30 min), original tweets ({time_opt_status}), "
         f"intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h), "
-        f"{launch_detection_status}, {whale_status}, {competitor_status}, {thread_mode_status} — "
+        f"{launch_detection_status}, {whale_status}, {competitor_status}, {thread_mode_status}, "
+        f"{correlation_status}, {staking_status}, "
+        f"{burn_status}, {rewards_status}, {launch_guide_status} — "
         f"list poller DISABLED, follower scan DISABLED"
     )
 

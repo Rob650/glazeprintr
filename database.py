@@ -61,6 +61,23 @@ def init_db():
         conn.commit()
 
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS burn_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT,
+                contract_address TEXT,
+                tx_hash TEXT UNIQUE,
+                burned_amount REAL,
+                bought_back_amount REAL,
+                block_timestamp TEXT,
+                detected_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                tweeted_about INTEGER DEFAULT 0,
+                tweeted_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_burn_detected ON burn_events(detected_at);
+        """)
+        conn.commit()
+
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS whale_wallets (
                 address TEXT PRIMARY KEY,
                 label TEXT,
@@ -109,21 +126,6 @@ def init_db():
                 tweeted_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_launches_detected ON detected_launches(detected_at);
-        """)
-        conn.commit()
-
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS burn_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                contract_address TEXT,
-                ticker TEXT,
-                burned_amount REAL,
-                burned_usd REAL,
-                detected_at TEXT DEFAULT (datetime('now')),
-                tweeted_about INTEGER DEFAULT 0,
-                tweeted_at TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_burn_detected ON burn_events(detected_at);
         """)
         conn.commit()
 
@@ -213,7 +215,6 @@ def init_db():
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_ticker', '');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('recent_tickers', '[]');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('recent_openers', '');
-            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('recent_topics', '[]');
 
             CREATE INDEX IF NOT EXISTS idx_replied_created ON replied_tweets(created_at);
             CREATE INDEX IF NOT EXISTS idx_glaze_created ON glaze_scores(created_at);
@@ -246,6 +247,26 @@ def init_db():
                 posted_hour_utc INTEGER,
                 posted_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS correlation_events (
+                id INTEGER PRIMARY KEY,
+                event_type TEXT,
+                tokens_involved TEXT,
+                magnitude REAL,
+                detected_at TEXT DEFAULT (datetime('now')),
+                tweeted_about INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS staking_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT,
+                staking_pct REAL,
+                staked_usd REAL,
+                snapshot_at TEXT DEFAULT (datetime('now'))
+            );
+
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_correlation_tweet_time', '');
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_staking_tweet_time', '');
         """)
 
 
@@ -458,66 +479,6 @@ def record_original_tweet(tweet_id: str, tweet_text: str, dry_run: bool):
         )
 
 
-def recently_tweeted_about_token(ticker: str, window_hours: int = 2) -> bool:
-    """
-    Returns True if a tweet mentioning this ticker was posted within the last window_hours,
-    across any feature: original tweets, whale volume alerts, burn events, or thread posts.
-    Used to prevent the same token appearing in multiple features in a short window.
-    """
-    ticker_lower = ticker.lower()
-    ticker_cashtag_lower = f"${ticker_lower}"
-    ticker_cashtag_upper = f"${ticker.upper()}"
-    window = f"-{window_hours} hours"
-    with db() as conn:
-        # original_tweets: check for cashtag mention in tweet text
-        row = conn.execute(
-            """SELECT 1 FROM original_tweets
-               WHERE (LOWER(tweet_text) LIKE ? OR tweet_text LIKE ?)
-               AND created_at >= datetime('now', ?) LIMIT 1""",
-            (f"%{ticker_cashtag_lower}%", f"%{ticker_cashtag_upper}%", window)
-        ).fetchone()
-        if row:
-            return True
-        # whale_transactions: check tweeted_about by ticker
-        row = conn.execute(
-            """SELECT 1 FROM whale_transactions
-               WHERE LOWER(token_ticker) = ? AND tweeted_about = 1
-               AND detected_at >= datetime('now', ?) LIMIT 1""",
-            (ticker_lower, window)
-        ).fetchone()
-        if row:
-            return True
-        # burn_events: check tweeted_about by ticker
-        row = conn.execute(
-            """SELECT 1 FROM burn_events
-               WHERE LOWER(ticker) = ? AND tweeted_about = 1
-               AND detected_at >= datetime('now', ?) LIMIT 1""",
-            (ticker_lower, window)
-        ).fetchone()
-        if row:
-            return True
-        # thread_posts: check by ticker
-        row = conn.execute(
-            """SELECT 1 FROM thread_posts
-               WHERE LOWER(ticker) = ?
-               AND posted_at >= datetime('now', ?) LIMIT 1""",
-            (ticker_lower, window)
-        ).fetchone()
-        if row:
-            return True
-    return False
-
-
-def get_recent_original_tweets(limit: int = 3) -> list[str]:
-    """Return the tweet_text of the most recent original tweets (for variety injection)."""
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT tweet_text FROM original_tweets ORDER BY created_at DESC LIMIT ?",
-            (limit,)
-        ).fetchall()
-        return [r["tweet_text"] for r in rows]
-
-
 # --- glaze_scores ---
 
 def has_scored(tweet_id: str) -> bool:
@@ -726,30 +687,6 @@ def add_opener(word: str, keep: int = 8):
     set_state("recent_openers", json.dumps(openers))
 
 
-# --- recent topic-key cooldown (prevents same non-ticker topic repeating too soon) ---
-
-def get_recent_topics(limit: int = 4) -> list[str]:
-    val = get_state("recent_topics")
-    if not val:
-        return []
-    try:
-        topics = json.loads(val)
-        return topics[-limit:] if len(topics) > limit else topics
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-
-def add_recent_topic(topic_key: str, keep: int = 4):
-    if not topic_key:
-        return
-    topics = get_recent_topics(keep)
-    topics = [t for t in topics if t != topic_key]  # move to end rather than duplicating
-    topics.append(topic_key)
-    if len(topics) > keep:
-        topics = topics[-keep:]
-    set_state("recent_topics", json.dumps(topics))
-
-
 # --- ecosystem_tweets (context from @printr and @masterprintr) ---
 
 def store_ecosystem_tweet(tweet_id: str, author_handle: str, text: str,
@@ -929,35 +866,81 @@ def record_tweet_performance(tweet_id: str, posted_hour_utc: int):
 
 
 
-def record_burn_event(contract_address: str, ticker: str, burned_amount: float, burned_usd: float) -> bool:
-    """Record a detected burn event. Returns True if new (deduped per contract per hour bucket)."""
+def record_correlation_event(event_type: str, tokens_involved: str, magnitude: float) -> int:
     with db() as conn:
         cursor = conn.execute(
-            """INSERT OR IGNORE INTO burn_events (contract_address, ticker, burned_amount, burned_usd)
-               VALUES (?, ?, ?, ?)""",
-            (contract_address, ticker, burned_amount, burned_usd)
+            """INSERT INTO correlation_events (event_type, tokens_involved, magnitude)
+               VALUES (?, ?, ?)""",
+            (event_type, tokens_involved, magnitude)
+        )
+        return cursor.lastrowid
+
+
+def mark_correlation_tweeted(event_id: int) -> None:
+    with db() as conn:
+        conn.execute(
+            "UPDATE correlation_events SET tweeted_about = 1 WHERE id = ?",
+            (event_id,)
+        )
+
+
+def get_last_correlation_tweet_time() -> str:
+    return get_state("last_correlation_tweet_time")
+
+
+def set_last_correlation_tweet_time() -> None:
+    set_state("last_correlation_tweet_time", datetime.now(timezone.utc).isoformat())
+
+
+def record_staking_snapshot(ticker: str, staking_pct: float, staked_usd: float) -> None:
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO staking_snapshots (ticker, staking_pct, staked_usd)
+               VALUES (?, ?, ?)""",
+            (ticker, staking_pct, staked_usd)
+        )
+
+
+def get_last_staking_tweet_time() -> str:
+    return get_state("last_staking_tweet_time")
+
+
+def set_last_staking_tweet_time() -> None:
+    set_state("last_staking_tweet_time", datetime.now(timezone.utc).isoformat())
+
+
+def record_burn_event(ticker: str, contract_address: str, tx_hash: str,
+                      burned_amount: float, bought_back_amount: float,
+                      block_timestamp: str) -> bool:
+    """Insert a new burn event. Returns True if new (deduped by tx_hash)."""
+    with db() as conn:
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO burn_events
+               (ticker, contract_address, tx_hash, burned_amount, bought_back_amount, block_timestamp)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (ticker.lower(), contract_address, tx_hash, burned_amount, bought_back_amount, block_timestamp)
         )
         return cursor.rowcount == 1
 
 
-def get_untweeted_burn_events(hours: int = 2) -> list[dict]:
+def get_untweeted_burns(min_burned: float = 0) -> list[dict]:
     with db() as conn:
         rows = conn.execute(
-            """SELECT id, contract_address, ticker, burned_amount, burned_usd, detected_at
+            """SELECT id, ticker, contract_address, tx_hash,
+                      burned_amount, bought_back_amount, block_timestamp
                FROM burn_events
-               WHERE tweeted_about = 0
-               AND detected_at >= datetime('now', ?)
-               ORDER BY burned_usd DESC""",
-            (f"-{hours} hours",)
+               WHERE tweeted_about = 0 AND burned_amount >= ?
+               ORDER BY detected_at ASC""",
+            (min_burned,)
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def mark_burn_event_tweeted(event_id: int) -> None:
+def mark_burn_tweeted(burn_id: int) -> None:
     with db() as conn:
         conn.execute(
             "UPDATE burn_events SET tweeted_about = 1, tweeted_at = datetime('now') WHERE id = ?",
-            (event_id,)
+            (burn_id,)
         )
 
 
