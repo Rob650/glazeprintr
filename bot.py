@@ -838,7 +838,7 @@ def poll_qt_glazer_list():
             logger.warning(f"QT sentiment scoring failed for {tweet_id}: {e}")
 
     try:
-        quote_text, _ = generate_quote_tweet(
+        quote_text, meme_path = generate_quote_tweet(
             tweet_text,
             author_handle,
             token_data=token_data,
@@ -854,7 +854,7 @@ def poll_qt_glazer_list():
     if DRY_RUN:
         logger.info(f"[DRY RUN] QT Glazer @{author_handle} score={best_score}: {quote_text[:80]}...")
     else:
-        qt_tweet_id = post_quote_tweet(quote_text, tweet_id, author_handle=author_handle)
+        qt_tweet_id = post_quote_tweet(quote_text, tweet_id, author_handle=author_handle, media_path=meme_path)
         if qt_tweet_id == QUOTE_TWEET_FORBIDDEN:
             logger.warning(f"QT forbidden for {tweet_id}: Twitter rejected quote — skipping")
             return
