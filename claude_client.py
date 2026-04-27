@@ -1378,6 +1378,56 @@ def _sentiment_tone_instruction(sentiment: str) -> str:
     return ""
 
 
+def generate_correlation_tweet(event_data: dict) -> str:
+    """Generate a tweet about multiple ecosystem tokens moving together."""
+    tokens = event_data.get("tokens_involved", [])
+    event_type = event_data.get("event_type", "multi_pump")
+    magnitude = event_data.get("magnitude", 0.0)
+
+    tokens_str = ", ".join(
+        f"${t['ticker']} {t['change']:+.0f}%" for t in tokens[:5]
+    )
+    system = (
+        SYSTEM_PROMPT_BASE + "\n\n"
+        "MODE: Ecosystem momentum tweet — concise, data-backed.\n"
+        "Write a tweet about multiple Printr ecosystem tokens moving simultaneously. "
+        "Name the tickers with their % moves. Ecosystem momentum energy — the whole ecosystem is speaking. "
+        "Under 240 chars. No URLs. Glaze vocab mandatory. Reply ONLY with the tweet text."
+    )
+    user_message = (
+        f"CORRELATION EVENT — {event_type.replace('_', ' ').upper()}:\n"
+        f"Tokens moving together: {tokens_str}\n"
+        f"Average move: {magnitude:+.1f}%\n\n"
+        "Generate a tweet about this ecosystem momentum. "
+        "Reply ONLY with the tweet text, no quotes, no explanation."
+    )
+    return _clean_reply(_call_claude(system, user_message, max_tokens=150))
+
+
+def generate_staking_tweet(leaderboard: list[dict]) -> str:
+    """Generate a yield/staking comparison tweet from the ranked leaderboard."""
+    if not leaderboard:
+        return ""
+    top = leaderboard[:5]
+    staking_str = ", ".join(
+        f"${t['ticker']} {t['staking_pct']:.0f}% staked" for t in top
+    )
+    system = (
+        SYSTEM_PROMPT_BASE + "\n\n"
+        "MODE: Staking leaderboard tweet — yield-focused, conviction-driven.\n"
+        "Write a tweet comparing POB staking conviction across Printr ecosystem tokens. "
+        "Lead with the highest staker as proof of belief. "
+        "Frame Printr as the yield layer for memes — real on-chain yield, not printed emissions. "
+        "Under 240 chars. No URLs. Glaze vocab mandatory. Reply ONLY with the tweet text."
+    )
+    user_message = (
+        f"STAKING LEADERBOARD (ranked by % supply locked):\n{staking_str}\n\n"
+        "Generate a tweet about Printr ecosystem staking conviction. "
+        "Reply ONLY with the tweet text, no quotes, no explanation."
+    )
+    return _clean_reply(_call_claude(system, user_message, max_tokens=150))
+
+
 _CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 _RETRY_STATUS_CODES = {429, 500, 529}
 

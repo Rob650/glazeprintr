@@ -230,6 +230,26 @@ def init_db():
                 posted_hour_utc INTEGER,
                 posted_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS correlation_events (
+                id INTEGER PRIMARY KEY,
+                event_type TEXT,
+                tokens_involved TEXT,
+                magnitude REAL,
+                detected_at TEXT DEFAULT (datetime('now')),
+                tweeted_about INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS staking_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT,
+                staking_pct REAL,
+                staked_usd REAL,
+                snapshot_at TEXT DEFAULT (datetime('now'))
+            );
+
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_correlation_tweet_time', '');
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_staking_tweet_time', '');
         """)
 
 
@@ -827,6 +847,49 @@ def record_tweet_performance(tweet_id: str, posted_hour_utc: int):
             (tweet_id, posted_hour_utc)
         )
 
+
+
+def record_correlation_event(event_type: str, tokens_involved: str, magnitude: float) -> int:
+    with db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO correlation_events (event_type, tokens_involved, magnitude)
+               VALUES (?, ?, ?)""",
+            (event_type, tokens_involved, magnitude)
+        )
+        return cursor.lastrowid
+
+
+def mark_correlation_tweeted(event_id: int) -> None:
+    with db() as conn:
+        conn.execute(
+            "UPDATE correlation_events SET tweeted_about = 1 WHERE id = ?",
+            (event_id,)
+        )
+
+
+def get_last_correlation_tweet_time() -> str:
+    return get_state("last_correlation_tweet_time")
+
+
+def set_last_correlation_tweet_time() -> None:
+    set_state("last_correlation_tweet_time", datetime.now(timezone.utc).isoformat())
+
+
+def record_staking_snapshot(ticker: str, staking_pct: float, staked_usd: float) -> None:
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO staking_snapshots (ticker, staking_pct, staked_usd)
+               VALUES (?, ?, ?)""",
+            (ticker, staking_pct, staked_usd)
+        )
+
+
+def get_last_staking_tweet_time() -> str:
+    return get_state("last_staking_tweet_time")
+
+
+def set_last_staking_tweet_time() -> None:
+    set_state("last_staking_tweet_time", datetime.now(timezone.utc).isoformat())
 
 
 def get_ecosystem_context_age_hours() -> float | None:

@@ -1,3 +1,4 @@
+import json
 import os
 import asyncio
 import logging
@@ -21,12 +22,16 @@ from database import (
     count_launch_alerts_last_hour, get_untweeted_launches, mark_launch_tweeted,
     get_untweeted_whale_transactions, mark_whale_transaction_tweeted, count_whale_tweets_last_hour,
     record_thread_post, count_threads_today, record_tweet_performance,
+    record_correlation_event, mark_correlation_tweeted, get_last_correlation_tweet_time,
+    set_last_correlation_tweet_time, record_staking_snapshot,
+    get_last_staking_tweet_time, set_last_staking_tweet_time,
 )
 import launch_detector
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
     classify_tweet_intent, generate_quote_tweet, generate_thread_tweets,
     _OTHER_TICKERS, _pick_meme, score_sentiment,
+    generate_correlation_tweet, generate_staking_tweet,
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
@@ -51,6 +56,8 @@ ENABLE_COMPETITOR_DATA = os.environ.get("ENABLE_COMPETITOR_DATA", "false").lower
 MAX_LAUNCH_ALERTS_PER_HOUR = 2
 MAX_WHALE_TWEETS_PER_HOUR = 3
 ENABLE_THREAD_MODE = os.environ.get("ENABLE_THREAD_MODE", "false").lower() == "true"
+ENABLE_CORRELATION_TWEETS = os.environ.get("ENABLE_CORRELATION_TWEETS", "false").lower() == "true"
+ENABLE_STAKING_TWEETS = os.environ.get("ENABLE_STAKING_TWEETS", "false").lower() == "true"
 MAX_THREADS_PER_DAY = 2
 _THREAD_HEAT_THRESHOLD = 85.0
 _THREAD_24H_THRESHOLD = 50.0
@@ -931,16 +938,20 @@ def poll_whale_activity():
         action = tx["action"]
         amount_usd = tx["amount_usd"]
 
-        context = (
-            f"WHALE ALERT — ${ticker.upper()}:\n"
-            f"  Action: {action} (large wallet activity detected)\n"
-            f"  1h volume: ${amount_usd:,.0f}\n"
-            f"Generate a tweet about this whale activity. "
-            f"Example: 'Top ${ticker.upper()} wallet just {'moved in' if action == 'BUY' else 'moved out'} "
-            f"${amount_usd:,.0f}. {'Holders accumulating' if action == 'BUY' else 'Smart money rotating'} — watch closely.' "
-            f"Be specific with the dollar amount. {'Bullish spin.' if action == 'BUY' else 'Neutral-observational.'} "
-            f"Max 240 chars. No URLs. Glaze vocab mandatory. Reply ONLY with the tweet text."
+        proj_data = next(
+            (p for p in _latest_projects if p.get("name", "").lower() == ticker.lower()),
+            {}
         )
+        move = {
+            "ticker": ticker,
+            "action": action,
+            "amount_usd": amount_usd,
+            "price_change_1h": proj_data.get("price_change_1h") or 0.0,
+            "buys_1h": proj_data.get("buys_1h") or 0,
+            "sells_1h": proj_data.get("sells_1h") or 0,
+            "market_cap": proj_data.get("market_cap"),
+        }
+        context = whale_tracker.format_whale_tweet_context(move)
 
         try:
             tweet_text = _call_claude(SYSTEM_PROMPT_BASE, context, max_tokens=150)
@@ -1144,6 +1155,117 @@ async def post_original_tweet():
                 logger.warning("Failed to post original tweet")
     except Exception as e:
         logger.error(f"Original tweet job error: {e}")
+
+
+async def check_correlations():
+    """Detect multi-token pumps or volume spikes and post a correlation tweet. No-op when flag is off."""
+    if not ENABLE_CORRELATION_TWEETS:
+        return
+
+    if is_paused():
+        return
+
+    event = intel_mod.detect_correlations()
+    if not event:
+        logger.debug("check_correlations: no correlation event detected")
+        return
+
+    last_time_str = get_last_correlation_tweet_time()
+    if last_time_str:
+        try:
+            last_time = datetime.fromisoformat(last_time_str)
+            if last_time.tzinfo is None:
+                last_time = last_time.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - last_time).total_seconds() < 10800:
+                logger.info("Correlation tweet cooldown active (3h) — skipping")
+                return
+        except (ValueError, TypeError):
+            pass
+
+    logger.info(
+        f"check_correlations: {event['event_type']} detected — "
+        f"{len(event['tokens_involved'])} tokens, magnitude={event['magnitude']:+.1f}%"
+    )
+
+    try:
+        tweet_text = generate_correlation_tweet(event)
+    except Exception as e:
+        logger.error(f"Correlation tweet generation failed: {e}")
+        return
+
+    tokens_json = json.dumps([t["ticker"] for t in event.get("tokens_involved", [])])
+    event_id = record_correlation_event(event["event_type"], tokens_json, event["magnitude"])
+
+    if DRY_RUN:
+        logger.info(f"[DRY RUN] Correlation tweet ({event['event_type']}): {tweet_text[:100]}...")
+    else:
+        tweet_id = post_tweet(tweet_text)
+        if not tweet_id:
+            logger.warning("Failed to post correlation tweet")
+            return
+        logger.info(f"Correlation tweet posted: {event['event_type']} tweet_id={tweet_id}")
+
+    mark_correlation_tweeted(event_id)
+    set_last_correlation_tweet_time()
+
+
+async def post_staking_update():
+    """Post a staking leaderboard tweet. No-op when flag is off."""
+    if not ENABLE_STAKING_TWEETS:
+        return
+
+    if is_paused():
+        return
+
+    last_time_str = get_last_staking_tweet_time()
+    if last_time_str:
+        try:
+            last_time = datetime.fromisoformat(last_time_str)
+            if last_time.tzinfo is None:
+                last_time = last_time.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - last_time).total_seconds() < 43200:
+                logger.info("Staking tweet cooldown active (12h) — skipping")
+                return
+        except (ValueError, TypeError):
+            pass
+
+    projects = _latest_projects
+    if not projects:
+        logger.info("Staking update skipped — no project data cached yet")
+        return
+
+    leaderboard = intel_mod.get_staking_leaderboard(projects)
+    if not leaderboard:
+        logger.info("Staking update skipped — no staking data in current projects")
+        return
+
+    logger.info(
+        f"post_staking_update: {len(leaderboard)} tokens with staking data, "
+        f"top={leaderboard[0]['ticker']} {leaderboard[0]['staking_pct']:.0f}%"
+    )
+
+    try:
+        tweet_text = generate_staking_tweet(leaderboard)
+    except Exception as e:
+        logger.error(f"Staking tweet generation failed: {e}")
+        return
+
+    for entry in leaderboard:
+        try:
+            record_staking_snapshot(entry["ticker"], entry["staking_pct"], entry["staked_usd"])
+        except Exception as e:
+            logger.warning(f"Failed to record staking snapshot for {entry['ticker']}: {e}")
+
+    if DRY_RUN:
+        logger.info(f"[DRY RUN] Staking tweet: {tweet_text[:100]}...")
+    else:
+        tweet_id = post_tweet(tweet_text)
+        if not tweet_id:
+            logger.warning("Failed to post staking tweet")
+            return
+        logger.info(f"Staking tweet posted: tweet_id={tweet_id}")
+
+    set_last_staking_tweet_time()
 
 
 async def refresh_intelligence_job():

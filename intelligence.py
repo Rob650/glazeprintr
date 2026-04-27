@@ -466,6 +466,74 @@ def get_optimal_interval() -> int:
     return 60
 
 
+def detect_correlations() -> Optional[dict]:
+    """
+    Detect multi-token pumps (3+ tokens with >10% 1h change) or ecosystem-wide
+    volume spikes (1h vol ≥ 3× hourly average). Returns None if no event found.
+    """
+    intel = _cached_intelligence
+    if not intel or not intel.projects:
+        return None
+
+    projects = intel.projects
+
+    pumping = [
+        {"ticker": p["name"].upper(), "change": p["price_change_1h"]}
+        for p in projects
+        if (p.get("price_change_1h") or 0.0) > 10.0
+    ]
+    if len(pumping) >= 3:
+        magnitude = sum(t["change"] for t in pumping) / len(pumping)
+        return {
+            "event_type": "multi_pump",
+            "tokens_involved": pumping,
+            "magnitude": round(magnitude, 1),
+        }
+
+    total_vol_24h = sum(p.get("volume") or 0.0 for p in projects)
+    total_vol_1h = sum(p.get("volume_1h") or 0.0 for p in projects)
+    if total_vol_24h > 0 and total_vol_1h > 0:
+        hourly_avg = total_vol_24h / 24.0
+        if hourly_avg > 0 and total_vol_1h >= hourly_avg * _VOLUME_SURGE_MULT:
+            top_vol = sorted(
+                [p for p in projects if p.get("volume_1h")],
+                key=lambda p: p.get("volume_1h") or 0,
+                reverse=True,
+            )[:5]
+            tokens_involved = [
+                {"ticker": p["name"].upper(), "change": p.get("price_change_1h") or 0.0}
+                for p in top_vol
+            ]
+            magnitude = (
+                sum(t["change"] for t in tokens_involved) / len(tokens_involved)
+                if tokens_involved else 0.0
+            )
+            return {
+                "event_type": "volume_spike",
+                "tokens_involved": tokens_involved,
+                "magnitude": round(magnitude, 1),
+            }
+
+    return None
+
+
+def get_staking_leaderboard(projects: list) -> list[dict]:
+    """Rank tokens by staking_pct descending; returns only tokens with staking data."""
+    staking_tokens = [p for p in projects if p.get("staking_pct") is not None]
+    staking_tokens.sort(key=lambda p: p.get("staking_pct") or 0.0, reverse=True)
+    result = []
+    for p in staking_tokens:
+        mc = p.get("market_cap") or 0.0
+        pct = p.get("staking_pct") or 0.0
+        result.append({
+            "ticker": p["name"].upper(),
+            "staking_pct": pct,
+            "market_cap": mc,
+            "staked_usd": mc * pct / 100.0,
+        })
+    return result
+
+
 def get_keyword_weights() -> dict[str, list[str]]:
     """
     Return prioritized ticker lists for the three bot functions.
