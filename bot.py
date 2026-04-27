@@ -18,7 +18,9 @@ from database import (
     store_ecosystem_tweet, get_ecosystem_context_age_hours,
     try_claim_quote, record_quote_tweet,
     get_qt_glazer_since_id, set_qt_glazer_since_id,
+    count_launch_alerts_last_hour, get_untweeted_launches, mark_launch_tweeted,
 )
+import launch_detector
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
     classify_tweet_intent, generate_quote_tweet,
@@ -40,6 +42,8 @@ X_LIST_ID = os.environ.get("X_LIST_ID", "")
 QT_GLAZER_LIST_ID = os.environ.get("QT_GLAZER_LIST_ID", "2048242501333799282")
 MAX_REPLIES_PER_ACCOUNT_HOUR = int(os.environ.get("MAX_REPLIES_PER_ACCOUNT_HOUR", "5"))
 MAX_SCORES_PER_DAY = int(os.environ.get("MAX_SCORES_PER_DAY", "20"))
+ENABLE_LAUNCH_DETECTION = os.environ.get("ENABLE_LAUNCH_DETECTION", "false").lower() == "true"
+MAX_LAUNCH_ALERTS_PER_HOUR = 2
 
 _BOT_START_TIME = datetime.now(timezone.utc)
 
@@ -809,6 +813,65 @@ def poll_qt_glazer_list():
         qt_tweet_id=qt_tweet_id,
         dry_run=DRY_RUN,
     )
+
+
+async def poll_new_launches():
+    """Check for new Printr token launches and post alert tweets. No-op when flag is off."""
+    if not ENABLE_LAUNCH_DETECTION:
+        return
+
+    if is_paused():
+        logger.info("Bot paused — skipping launch detection poll")
+        return
+
+    logger.info("Polling for new Printr token launches...")
+    await launch_detector.detect_new_launches()
+
+    alerts_this_hour = count_launch_alerts_last_hour()
+    if alerts_this_hour >= MAX_LAUNCH_ALERTS_PER_HOUR:
+        logger.info(
+            f"Launch alert rate limit reached ({alerts_this_hour}/{MAX_LAUNCH_ALERTS_PER_HOUR}/hr) — skipping"
+        )
+        return
+
+    untweeted = get_untweeted_launches(hours=2)
+    if not untweeted:
+        logger.info("No untweeted launches within last 2 hours")
+        return
+
+    for launch in untweeted:
+        if alerts_this_hour >= MAX_LAUNCH_ALERTS_PER_HOUR:
+            logger.info("Launch alert rate limit reached mid-batch — stopping")
+            break
+
+        ticker = launch.get("ticker", "?")
+        contract = launch["contract_address"]
+
+        try:
+            tweet_text = launch_detector.generate_launch_alert_tweet(launch)
+        except Exception as e:
+            logger.error(f"Launch alert generation failed for ${ticker.upper()}: {e}")
+            continue
+
+        if DRY_RUN:
+            logger.info(f"[DRY RUN] Launch alert ${ticker.upper()}: {tweet_text[:100]}...")
+            mark_launch_tweeted(contract)
+        else:
+            tweet_id = post_tweet(tweet_text)
+            if not tweet_id:
+                logger.warning(f"Launch alert post failed for ${ticker.upper()}")
+                continue
+            logger.info(f"Launch alert posted: ${ticker.upper()} tweet_id={tweet_id}")
+            mark_launch_tweeted(contract)
+
+        alerts_this_hour += 1
+
+        # Register with intelligence: add to KNOWN_CONTRACTS so next scrape cycle picks it up
+        from scraper import KNOWN_CONTRACTS as _kc, _CONTRACT_TO_NAME as _c2n
+        if contract not in _kc.values():
+            _kc[ticker.lower()] = contract
+            _c2n[contract] = ticker.lower()
+            logger.info(f"Registered ${ticker.upper()} ({contract}) in KNOWN_CONTRACTS for intelligence tracking")
 
 
 ECOSYSTEM_ACCOUNTS = ["masterprintr", "printr"]

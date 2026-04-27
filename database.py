@@ -61,6 +61,23 @@ def init_db():
         conn.commit()
 
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS detected_launches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                contract_address TEXT UNIQUE,
+                ticker TEXT,
+                name TEXT,
+                detected_at TEXT DEFAULT (datetime('now')),
+                first_price REAL,
+                first_liquidity REAL,
+                fee_model TEXT,
+                tweeted_about INTEGER DEFAULT 0,
+                tweeted_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_launches_detected ON detected_launches(detected_at);
+        """)
+        conn.commit()
+
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS replied_tweets (
                 tweet_id TEXT PRIMARY KEY,
                 author_id TEXT,
@@ -605,6 +622,59 @@ def get_ecosystem_tweets(limit: int = 40) -> list[dict]:
             (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- detected_launches (launch detection feature) ---
+
+def record_launch(contract_address: str, ticker: str, name: str,
+                  first_price: float | None, first_liquidity: float | None,
+                  fee_model: str | None) -> bool:
+    """Insert a newly detected launch. Returns True if it was new, False if already recorded."""
+    with db() as conn:
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO detected_launches
+               (contract_address, ticker, name, first_price, first_liquidity, fee_model)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (contract_address, ticker, name, first_price, first_liquidity, fee_model)
+        )
+        return cursor.rowcount == 1
+
+
+def get_untweeted_launches(hours: int = 2) -> list[dict]:
+    """Return launches detected within the last N hours that haven't been tweeted about."""
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT contract_address, ticker, name, detected_at,
+                      first_price, first_liquidity, fee_model
+               FROM detected_launches
+               WHERE tweeted_about = 0
+               AND detected_at >= datetime('now', ?)
+               ORDER BY detected_at ASC""",
+            (f"-{hours} hours",)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_launch_tweeted(contract_address: str):
+    """Mark a detected launch as tweeted."""
+    with db() as conn:
+        conn.execute(
+            """UPDATE detected_launches
+               SET tweeted_about = 1, tweeted_at = datetime('now')
+               WHERE contract_address = ?""",
+            (contract_address,)
+        )
+
+
+def count_launch_alerts_last_hour() -> int:
+    """Count launch alert tweets posted in the last hour (for rate limiting)."""
+    with db() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) FROM detected_launches
+               WHERE tweeted_about = 1
+               AND tweeted_at >= datetime('now', '-1 hour')"""
+        ).fetchone()
+        return row[0] if row else 0
 
 
 def get_ecosystem_context_age_hours() -> float | None:
