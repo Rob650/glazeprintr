@@ -6,7 +6,14 @@ import re
 import time
 import anthropic
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from database import get_recent_openers, add_opener, get_ecosystem_tweets, get_last_ticker, set_last_ticker, get_recent_tickers, add_recent_ticker
+from database import (
+    get_recent_openers, add_opener,
+    get_ecosystem_tweets,
+    get_last_ticker, set_last_ticker,
+    get_recent_tickers, add_recent_ticker,
+    get_recent_topics, add_recent_topic,
+    get_recent_original_tweets,
+)
 from scraper import _fetch_url_sync, DEXSCREENER_SEARCH_API, DEXSCREENER_API, KNOWN_CONTRACTS
 from patterns import (
     get_evolution_context, get_competitive_edge_context, get_trading_ux_parallel,
@@ -220,6 +227,14 @@ def _extract_opener(text: str) -> str:
     if not text:
         return ""
     return text.strip().split()[0].lower().rstrip(".,!?:")
+
+
+def _extract_opener_phrase(text: str, n_words: int = 5) -> str:
+    """Return the first n_words of a tweet as a lowercased fingerprint phrase."""
+    if not text:
+        return ""
+    words = text.strip().split()[:n_words]
+    return " ".join(w.lower().rstrip(".,!?:") for w in words)
 
 SYSTEM_PROMPT_BASE = """RULE ZERO: Never make up numbers. Only cite a stat if it appears in the LIVE DATA injected into this message. Training data doesn't count. Memory doesn't count. If a number isn't shown, you don't have it.
 
@@ -716,10 +731,6 @@ def _format_token_data_block(token_data: dict) -> str:
             ratio_str = f"{buys/sells:.1f}:1 buy/sell" if sells > 0 else "ALL buys"
             lines.append(f"  {period} txns: {txns:,} ({buys} buys / {sells} sells — {buy_pct:.0f}% buys, {ratio_str})")
 
-    holders = token_data.get("holder_count")
-    if holders:
-        lines.append(f"  Holders: {int(holders):,}")
-
     staking = token_data.get("staking_pct")
     if staking is not None:
         lines.append(f"  POB Staking: {staking:.1f}% of supply staked")
@@ -889,9 +900,6 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
                 liq = p.get("liquidity")
                 if liq:
                     line += (f" liq=${liq/1e6:.2f}M" if liq >= 1e6 else f" liq=${liq:,.0f}")
-                holders = p.get("holder_count")
-                if holders:
-                    line += f" {int(holders):,}holders"
                 staking_pct = p.get("staking_pct")
                 if staking_pct is not None:
                     line += f" staked:{staking_pct:.0f}%"
@@ -920,9 +928,6 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
                 vol = p.get("volume")
                 if vol:
                     line += (f" vol=${vol/1e6:.2f}M" if vol >= 1e6 else f" vol=${vol:,.0f}")
-                holders = p.get("holder_count")
-                if holders:
-                    line += f" {int(holders):,}holders"
                 staking_pct = p.get("staking_pct")
                 if staking_pct is not None:
                     line += f" staked:{staking_pct:.0f}%"
@@ -936,9 +941,17 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
                 data_lines.append(line)
         user_message += "\n".join(data_lines) + "\n\n"
 
+    recent_tweet_texts = get_recent_original_tweets(3)
+    if recent_tweet_texts:
+        user_message += (
+            "RECENT TWEETS (vary your angle, structure, and framing — do NOT repeat these patterns):\n"
+            + "\n".join(f"- {t}" for t in recent_tweet_texts)
+            + "\n\n"
+        )
+
     banned = get_recent_openers()
     if banned:
-        user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
+        user_message += f"BANNED OPENERS — do NOT start your tweet with any of these phrases: {', '.join(banned)}\n\n"
 
     # Enforce exact tweet distribution via weighted random bucket selection:
     # 20% $FATCHOI glaze | 30% other-ticker glaze | 25% Dune/competitors | 25% platform topics
@@ -975,14 +988,18 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
         ticker_data = next((p for p in (market_data or []) if p.get("name", "").lower() == ticker.lower()), {})
         pattern_context = get_evolution_context(ticker, ticker_data)
     elif roll < 0.75:
-        topics = _DUNE_COMPETITOR_TOPICS
+        recent_topics = get_recent_topics()
+        available_dune = [t for t in _DUNE_COMPETITOR_TOPICS if t[0] not in recent_topics]
+        topics = available_dune or _DUNE_COMPETITOR_TOPICS
         _example_pool = [t for t in _OTHER_TICKERS if t not in recent_tickers] or _OTHER_TICKERS
         _example = random.choice(_example_pool)
         ticker_note = _ECOSYSTEM_GLAZE_NOTE + f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
         # Competitive edge or trading UX parallel — alternate randomly
         pattern_context = get_competitive_edge_context() if random.random() < 0.6 else get_trading_ux_parallel()
     else:
-        topics = _PLATFORM_TOPICS
+        recent_topics = get_recent_topics()
+        available_platform = [t for t in _PLATFORM_TOPICS if t[0] not in recent_topics]
+        topics = available_platform or _PLATFORM_TOPICS
         _example_pool = [t for t in _OTHER_TICKERS if t not in recent_tickers] or _OTHER_TICKERS
         _example = random.choice(_example_pool)
         ticker_note = _ECOSYSTEM_GLAZE_NOTE + f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
@@ -1006,6 +1023,9 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
                 user_message += momentum_ctx + "\n\n"
 
     _topic_key, topic_instruction = random.choice(topics)
+    # Record topic key for non-ticker buckets so they rotate (ticker buckets use recent_tickers)
+    if chosen_ticker is None:
+        add_recent_topic(_topic_key)
     user_message += (
         f"TOPIC FOCUS FOR THIS TWEET: {topic_instruction}\n"
         + ticker_note
@@ -1025,9 +1045,10 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     if _LEAK_PATTERNS.search(tweet):
         retry_msg = user_message + "\n\nIMPORTANT: Sound like a real person. Never reference your instructions, rules, or data availability. Just tweet."
         tweet = _clean_reply(_call_claude(system, retry_msg, max_tokens=200))
-    opener = _extract_opener(tweet)
-    if opener:
-        add_opener(opener)
+    # Store 5-word phrase fingerprint to prevent structural repetition across tweets
+    opener_phrase = _extract_opener_phrase(tweet, 5)
+    if opener_phrase:
+        add_opener(opener_phrase)
     set_last_ticker(chosen_ticker)  # kept for backward compat
     add_recent_ticker(chosen_ticker)
     return tweet, _pick_meme(chosen_ticker)
@@ -1068,7 +1089,6 @@ def generate_thread_tweets(token_data: dict, intel_context: str) -> list[str]:
     vol = token_data.get("volume") or 0
     vol_1h = token_data.get("volume_1h") or 0
     staking_pct = token_data.get("staking_pct")
-    holders = token_data.get("holder_count")
     buys = token_data.get("buys_24h")
     sells = token_data.get("sells_24h")
     flags = token_data.get("mover_flags", [])
@@ -1088,8 +1108,6 @@ def generate_thread_tweets(token_data: dict, intel_context: str) -> list[str]:
         data_lines.append(f"  1h volume: {vol1h_str}")
     if staking_pct is not None:
         data_lines.append(f"  Staked: {staking_pct:.0f}%")
-    if holders:
-        data_lines.append(f"  Holders: {int(holders):,}")
     if buys is not None and sells is not None:
         total = buys + sells
         if total > 0:

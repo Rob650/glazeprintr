@@ -126,21 +126,37 @@ def _post_api(path: str, payload: dict, cookie: str, timeout: int = 20) -> Optio
     return None
 
 
-def fetch_staking_totals_sync(max_pages: int = 60, page_size: int = 100) -> dict[str, float]:
-    """
-    Paginate through all staking positions and return total staked per token.
+_STAKING_TIERS = [7, 14, 30, 60, 90, 180]
+_STAKING_TIER_KEYS = {d: f"{d}d" for d in _STAKING_TIERS}
 
-    Returns {contract_address: total_staked_tokens}.
-    Positions are returned newest-first; we paginate until exhausted or max_pages.
+
+def _nearest_staking_tier(days: int) -> str:
+    """Map a lock duration in days to the nearest standard POB tier key."""
+    nearest = min(_STAKING_TIERS, key=lambda t: abs(t - days))
+    return _STAKING_TIER_KEYS[nearest]
+
+
+def fetch_staking_totals_sync(
+    max_pages: int = 60,
+    page_size: int = 100,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """
+    Paginate through all staking positions and return:
+      (totals, breakdown)
+    where:
+      totals    = {contract_address: total_staked_tokens}
+      breakdown = {"7d": total, "14d": total, ... "180d": total}
+                  aggregated across all tokens/positions by lock duration tier.
     """
     global _cached_cookie
 
     cookie = get_cookie()
     if not cookie:
         logger.warning("Printr API: no cookie, staking data unavailable")
-        return {}
+        return {}, {k: 0.0 for k in ["7d", "14d", "30d", "60d", "90d", "180d"]}
 
     totals: dict[str, float] = {}
+    breakdown: dict[str, float] = {k: 0.0 for k in ["7d", "14d", "30d", "60d", "90d", "180d"]}
     cursor: Optional[str] = None
     fetched = 0
 
@@ -174,6 +190,20 @@ def fetch_staking_totals_sync(max_pages: int = 60, page_size: int = 100) -> dict
                     decimals = int((pos.get("staked") or {}).get("decimals", 9))
                     amount = atomic / (10 ** decimals)
                     totals[contract] = totals.get(contract, 0.0) + amount
+
+                    # Extract lock duration and accumulate into breakdown
+                    raw_days = (
+                        pos.get("lock_duration_days")
+                        or pos.get("duration_days")
+                        or (pos.get("lock") or {}).get("duration_days")
+                        or (pos.get("lock") or {}).get("days")
+                    )
+                    if raw_days is not None:
+                        try:
+                            tier_key = _nearest_staking_tier(int(raw_days))
+                            breakdown[tier_key] = breakdown.get(tier_key, 0.0) + amount
+                        except (ValueError, TypeError):
+                            pass
                 except (ValueError, TypeError):
                     pass
 
@@ -186,10 +216,13 @@ def fetch_staking_totals_sync(max_pages: int = 60, page_size: int = 100) -> dict
     if cursor:
         logger.info(f"Printr staking: fetched {fetched} positions ({max_pages} pages), {len(totals)} tokens (more exist)")
 
-    return totals
+    return totals, breakdown
 
 
-async def fetch_staking_totals_async(max_pages: int = 60, page_size: int = 100) -> dict[str, float]:
+async def fetch_staking_totals_async(
+    max_pages: int = 60,
+    page_size: int = 100,
+) -> tuple[dict[str, float], dict[str, float]]:
     """Async wrapper: runs fetch_staking_totals_sync in a thread executor."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: fetch_staking_totals_sync(max_pages, page_size))

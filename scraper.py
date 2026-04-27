@@ -164,20 +164,23 @@ async def _fetch_dexscreener(session: aiohttp.ClientSession, contract_address: s
     return {}
 
 
-async def _fetch_staking_from_partner_api() -> dict[str, float]:
+async def _fetch_staking_from_partner_api() -> tuple[dict[str, float], dict[str, float]]:
     """
     Fetch staking totals per token from the Printr Partner API.
-    Returns {contract_address: total_staked_tokens}.
+    Returns (totals, breakdown) where:
+      totals    = {contract_address: total_staked_tokens}
+      breakdown = {"7d": float, "14d": float, ...} aggregated by lock tier.
     Runs in a thread since the Partner API client is sync.
     """
     from printr_api import fetch_staking_totals_async
+    _empty_breakdown = {k: 0.0 for k in ["7d", "14d", "30d", "60d", "90d", "180d"]}
     try:
-        totals = await fetch_staking_totals_async(max_pages=60, page_size=100)
+        totals, breakdown = await fetch_staking_totals_async(max_pages=60, page_size=100)
         logger.info(f"Printr Partner API: staking totals for {len(totals)} tokens")
-        return totals
+        return totals, breakdown
     except Exception as e:
         logger.warning(f"Printr Partner API staking fetch failed: {e}")
-        return {}
+        return {}, _empty_breakdown
 
 
 def _normalize_token(raw: dict) -> Optional[dict]:
@@ -432,7 +435,7 @@ async def scrape_all_data() -> list[dict]:
 
     async with aiohttp.ClientSession(headers=HEADERS) as session:
         # Fetch staking totals and Dune analytics in parallel
-        staking_totals, dune_ctx = await asyncio.gather(
+        (staking_totals, staking_breakdown), dune_ctx = await asyncio.gather(
             _fetch_staking_from_partner_api(),
             fetch_dune_context(session),
         )

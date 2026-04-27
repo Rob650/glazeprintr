@@ -156,12 +156,11 @@ def detect_whale_activity() -> list[dict]:
 
 def format_whale_tweet_context(move: dict) -> str:
     """Format a whale move dict into a prompt snippet for Claude."""
-    action_word = "accumulating" if move["action"] == "BUY" else "distributing"
-    direction = "into" if move["action"] == "BUY" else "out of"
+    dominance = "buy-dominant" if move["action"] == "BUY" else "sell-dominant"
     lines = [
-        f"WHALE ALERT — ${move['ticker'].upper()}:",
-        f"  Action: {move['action']} (large wallet {action_word})",
-        f"  1h volume: ${move['amount_usd']:,.0f} flowing {direction} ${move['ticker'].upper()}",
+        f"VOLUME ANOMALY — ${move['ticker'].upper()}:",
+        f"  Signal: anomalous volume spike — {dominance} activity detected",
+        f"  1h volume: ${move['amount_usd']:,.0f} (well above hourly average)",
         f"  1h price change: {move['price_change_1h']:+.1f}%",
         f"  Buy/sell split: {move['buys_1h']} buys / {move['sells_1h']} sells",
     ]
@@ -169,10 +168,10 @@ def format_whale_tweet_context(move: dict) -> str:
         mc = move["market_cap"]
         lines.append(f"  Market cap: ${mc/1e6:.2f}M" if mc >= 1e6 else f"  Market cap: ${mc:,.0f}")
     lines.append(
-        "\nGenerate a tweet about this whale activity. "
-        "Example tone: 'Top $FATCHOI wallet just moved $12K in. "
-        "Holders accumulating while price consolidates.' "
-        "Be specific with the numbers. Bullish spin if BUY, neutral-observational if SELL. "
+        "\nGenerate a tweet about this volume anomaly. "
+        "Be honest: this is unusual buying/selling activity, not a confirmed single wallet. "
+        "Example tone: '$FATCHOI seeing anomalous buy pressure — $12K in the last hour, 3x the hourly average.' "
+        "Be specific with the numbers. Bullish spin if buy-dominant, neutral-observational if sell-dominant. "
         "Max 240 chars. No URLs. Glaze vocab mandatory."
     )
     return "\n".join(lines)
