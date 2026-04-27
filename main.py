@@ -20,6 +20,7 @@ logger = logging.getLogger("glazeprintr")
 
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
 DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
+ENABLE_LAUNCH_DETECTION = os.environ.get("ENABLE_LAUNCH_DETECTION", "false").lower() == "true"
 
 scheduler = AsyncIOScheduler()
 
@@ -68,8 +69,12 @@ async def lifespan(app: FastAPI):
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.refresh_intelligence_job, "interval", minutes=15, id="intelligence_refresher", replace_existing=True,
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    if ENABLE_LAUNCH_DETECTION:
+        scheduler.add_job(bot.poll_new_launches, "interval", minutes=10, id="launch_detector", replace_existing=True,
+                          max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.start()
-    logger.info("Schedulers started: mentions (5 min), QT glazer (30 min), original tweets (60 min), intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h) — list poller DISABLED, follower scan DISABLED")
+    launch_detection_status = "launch detection (10 min)" if ENABLE_LAUNCH_DETECTION else "launch detection DISABLED"
+    logger.info(f"Schedulers started: mentions (5 min), QT glazer (30 min), original tweets (60 min), intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h), {launch_detection_status} — list poller DISABLED, follower scan DISABLED")
 
     yield
 
