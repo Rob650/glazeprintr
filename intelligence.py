@@ -446,6 +446,64 @@ def get_intelligence() -> Optional[EcosystemIntelligence]:
     return _cached_intelligence
 
 
+def detect_correlations(intel: EcosystemIntelligence) -> Optional[dict]:
+    """
+    Returns a correlation event dict if 3+ tokens are pumping simultaneously (>10% 1h)
+    or if ecosystem-wide 1h volume is spiking (≥3× expected hourly average).
+    Returns None if no correlation detected.
+    """
+    # Multi-pump: 3+ tokens each up >10% in the same 1h window
+    pumping = [
+        t for t in intel.ranked_tokens
+        if (t.get("price_change_1h") or 0.0) > 10.0
+    ]
+    if len(pumping) >= 3:
+        top = sorted(pumping, key=lambda t: t.get("price_change_1h", 0.0), reverse=True)[:5]
+        avg_gain = sum(t.get("price_change_1h", 0.0) for t in top[:3]) / 3
+        return {
+            "event_type": "multi_pump",
+            "tokens": top,
+            "magnitude": round(avg_gain, 1),
+        }
+
+    # Volume spike: ecosystem 1h vol ≥ 3× expected hourly average
+    total_vol_1h  = sum(t.get("volume_1h") or 0.0 for t in intel.ranked_tokens)
+    total_vol_24h = sum(t.get("volume")    or 0.0 for t in intel.ranked_tokens)
+    if total_vol_24h > 0 and total_vol_1h > 0:
+        expected_hourly = total_vol_24h / 24.0
+        if expected_hourly > 0 and total_vol_1h >= expected_hourly * _VOLUME_SURGE_MULT:
+            vol_leaders = sorted(
+                [t for t in intel.ranked_tokens if (t.get("volume_1h") or 0.0) > 0],
+                key=lambda t: t.get("volume_1h", 0.0),
+                reverse=True,
+            )[:5]
+            return {
+                "event_type": "volume_spike",
+                "tokens": vol_leaders,
+                "magnitude": round(total_vol_1h / expected_hourly, 1),
+            }
+
+    return None
+
+
+def get_staking_leaderboard(projects: list[dict]) -> list[dict]:
+    """
+    Rank tokens by staking conviction (staking_pct desc).
+    Enriches each entry with total_staked_usd = market_cap * staking_pct / 100.
+    """
+    staked = []
+    for p in projects:
+        pct = p.get("staking_pct")
+        if pct is None or pct <= 0:
+            continue
+        mc = p.get("market_cap") or 0.0
+        staked.append({
+            **p,
+            "total_staked_usd": mc * pct / 100.0,
+        })
+    return sorted(staked, key=lambda t: t.get("staking_pct", 0.0), reverse=True)
+
+
 def get_keyword_weights() -> dict[str, list[str]]:
     """
     Return prioritized ticker lists for the three bot functions.

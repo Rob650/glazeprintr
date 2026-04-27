@@ -21,6 +21,8 @@ logger = logging.getLogger("glazeprintr")
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
 DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
 ENABLE_LAUNCH_DETECTION = os.environ.get("ENABLE_LAUNCH_DETECTION", "false").lower() == "true"
+ENABLE_CORRELATION_TWEETS = os.environ.get("ENABLE_CORRELATION_TWEETS", "false").lower() == "true"
+ENABLE_STAKING_TWEETS = os.environ.get("ENABLE_STAKING_TWEETS", "false").lower() == "true"
 
 scheduler = AsyncIOScheduler()
 
@@ -72,9 +74,22 @@ async def lifespan(app: FastAPI):
     if ENABLE_LAUNCH_DETECTION:
         scheduler.add_job(bot.poll_new_launches, "interval", minutes=10, id="launch_detector", replace_existing=True,
                           max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    if ENABLE_CORRELATION_TWEETS:
+        scheduler.add_job(bot.check_correlations, "interval", minutes=15, id="correlation_checker", replace_existing=True,
+                          max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    if ENABLE_STAKING_TWEETS:
+        scheduler.add_job(bot.post_staking_update, "interval", hours=12, id="staking_updater", replace_existing=True,
+                          max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.start()
     launch_detection_status = "launch detection (10 min)" if ENABLE_LAUNCH_DETECTION else "launch detection DISABLED"
-    logger.info(f"Schedulers started: mentions (5 min), QT glazer (30 min), original tweets (60 min), intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h), {launch_detection_status} — list poller DISABLED, follower scan DISABLED")
+    correlation_status = "correlation tweets (15 min)" if ENABLE_CORRELATION_TWEETS else "correlation tweets DISABLED"
+    staking_status = "staking tweets (12h)" if ENABLE_STAKING_TWEETS else "staking tweets DISABLED"
+    logger.info(
+        f"Schedulers started: mentions (5 min), QT glazer (30 min), original tweets (60 min), "
+        f"intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h), "
+        f"{launch_detection_status}, {correlation_status}, {staking_status} — "
+        f"list poller DISABLED, follower scan DISABLED"
+    )
 
     yield
 

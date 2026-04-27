@@ -19,11 +19,15 @@ from database import (
     try_claim_quote, record_quote_tweet,
     get_qt_glazer_since_id, set_qt_glazer_since_id,
     count_launch_alerts_last_hour, get_untweeted_launches, mark_launch_tweeted,
+    record_correlation_event, mark_correlation_tweeted,
+    get_last_correlation_tweet_time, set_last_correlation_tweet_time,
+    record_staking_snapshot, get_last_staking_tweet_time, set_last_staking_tweet_time,
 )
 import launch_detector
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
     classify_tweet_intent, generate_quote_tweet,
+    generate_correlation_tweet, generate_staking_tweet,
     _OTHER_TICKERS, _pick_meme,
 )
 from twitter_client import (
@@ -43,6 +47,8 @@ QT_GLAZER_LIST_ID = os.environ.get("QT_GLAZER_LIST_ID", "2048242501333799282")
 MAX_REPLIES_PER_ACCOUNT_HOUR = int(os.environ.get("MAX_REPLIES_PER_ACCOUNT_HOUR", "5"))
 MAX_SCORES_PER_DAY = int(os.environ.get("MAX_SCORES_PER_DAY", "20"))
 ENABLE_LAUNCH_DETECTION = os.environ.get("ENABLE_LAUNCH_DETECTION", "false").lower() == "true"
+ENABLE_CORRELATION_TWEETS = os.environ.get("ENABLE_CORRELATION_TWEETS", "false").lower() == "true"
+ENABLE_STAKING_TWEETS = os.environ.get("ENABLE_STAKING_TWEETS", "false").lower() == "true"
 MAX_LAUNCH_ALERTS_PER_HOUR = 2
 
 _BOT_START_TIME = datetime.now(timezone.utc)
@@ -1036,4 +1042,143 @@ async def refresh_intelligence_job():
             )
     except Exception as e:
         logger.error(f"intelligence_job error: {e}")
+
+
+_CORRELATION_COOLDOWN_HOURS = 3
+
+
+async def check_correlations():
+    """Detect cross-token correlation events and post narrative tweets. No-op when flag is off."""
+    if not ENABLE_CORRELATION_TWEETS:
+        return
+
+    if is_paused():
+        logger.info("Bot paused — skipping correlation check")
+        return
+
+    intel = intel_mod.get_intelligence()
+    if not intel:
+        logger.debug("check_correlations: no intelligence cache yet — skipping")
+        return
+
+    correlation = intel_mod.detect_correlations(intel)
+    if not correlation:
+        logger.debug("check_correlations: no correlation detected")
+        return
+
+    # Rate limit: max 1 correlation tweet per 3 hours
+    last_tweet_at = get_last_correlation_tweet_time()
+    if last_tweet_at:
+        try:
+            last_dt = datetime.fromisoformat(last_tweet_at)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
+            if hours_since < _CORRELATION_COOLDOWN_HOURS:
+                logger.info(
+                    f"check_correlations: cooldown active ({hours_since:.1f}h < {_CORRELATION_COOLDOWN_HOURS}h) — skipping"
+                )
+                return
+        except (ValueError, TypeError):
+            pass
+
+    token_names = [t.get("name", "?").upper() for t in correlation["tokens"]]
+    logger.info(
+        f"check_correlations: {correlation['event_type']} detected — "
+        f"tokens={token_names} magnitude={correlation['magnitude']}"
+    )
+
+    event_id = record_correlation_event(
+        event_type=correlation["event_type"],
+        tokens_involved=token_names,
+        magnitude=correlation["magnitude"],
+    )
+
+    try:
+        tweet_text = generate_correlation_tweet(correlation)
+    except Exception as e:
+        logger.error(f"check_correlations: tweet generation failed: {e}")
+        return
+
+    if DRY_RUN:
+        logger.info(f"[DRY RUN] Correlation tweet ({correlation['event_type']}): {tweet_text}")
+        mark_correlation_tweeted(event_id)
+        set_last_correlation_tweet_time()
+    else:
+        tweet_id = post_tweet(tweet_text)
+        if tweet_id:
+            mark_correlation_tweeted(event_id)
+            set_last_correlation_tweet_time()
+            logger.info(f"Correlation tweet posted: {tweet_id} — {tweet_text[:60]}...")
+        else:
+            logger.warning("check_correlations: post_tweet failed")
+
+
+_STAKING_TWEET_INTERVAL_HOURS = 12
+
+
+async def post_staking_update():
+    """Post a POB staking leaderboard tweet every 12 hours. No-op when flag is off."""
+    if not ENABLE_STAKING_TWEETS:
+        return
+
+    if is_paused():
+        logger.info("Bot paused — skipping staking update")
+        return
+
+    # Guard: enforce 12-hour interval via DB state (scheduler fires every 12h but this is a safety net)
+    last_tweet_at = get_last_staking_tweet_time()
+    if last_tweet_at:
+        try:
+            last_dt = datetime.fromisoformat(last_tweet_at)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
+            if hours_since < _STAKING_TWEET_INTERVAL_HOURS:
+                logger.info(
+                    f"post_staking_update: cooldown active ({hours_since:.1f}h < {_STAKING_TWEET_INTERVAL_HOURS}h) — skipping"
+                )
+                return
+        except (ValueError, TypeError):
+            pass
+
+    logger.info("Running staking leaderboard tweet job...")
+
+    if not _latest_projects:
+        logger.warning("post_staking_update: no project data available — skipping")
+        return
+
+    intel = intel_mod.get_intelligence()
+    health = intel.health if intel else {}
+
+    staking_tokens = intel_mod.get_staking_leaderboard(_latest_projects)
+    if not staking_tokens:
+        logger.info("post_staking_update: no tokens with staking data — skipping")
+        return
+
+    # Persist snapshot for historical tracking
+    for t in staking_tokens[:10]:
+        record_staking_snapshot(
+            token_name=t.get("name", ""),
+            contract_address=t.get("contract_address", ""),
+            staked_pct=t.get("staking_pct"),
+            total_staked_usd=t.get("total_staked_usd"),
+        )
+
+    try:
+        tweet_text = generate_staking_tweet(staking_tokens, health)
+    except Exception as e:
+        logger.error(f"post_staking_update: tweet generation failed: {e}")
+        return
+
+    if DRY_RUN:
+        logger.info(f"[DRY RUN] Staking leaderboard tweet: {tweet_text}")
+        set_last_staking_tweet_time()
+    else:
+        tweet_id = post_tweet(tweet_text)
+        if tweet_id:
+            set_last_staking_tweet_time()
+            logger.info(f"Staking tweet posted: {tweet_id} — {tweet_text[:60]}...")
+        else:
+            logger.warning("post_staking_update: post_tweet failed")
 

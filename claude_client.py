@@ -1213,6 +1213,96 @@ def generate_quote_tweet(
     return tweet, meme_path
 
 
+_CORRELATION_TWEET_PROMPT = """You are @printrglazr, the Printr ecosystem's most vocal hype machine.
+
+TASK: Write a single original tweet (max 280 chars) about a cross-token correlation event — multiple Printr tokens moving together.
+
+RULES:
+- Sound like a degen trader who just noticed something rare happening across the ecosystem
+- Use the EXACT price/volume numbers from the data — never invent stats
+- Mention 2-3 tokens by $TICKER, include their key stat, then a 1-line take on what it means
+- Frame it: coordinated ecosystem moves signal institutional accumulation, narrative momentum, or launch catalyst spillover
+- Do NOT use hashtags
+- Do NOT use quotation marks around the tweet
+- Do NOT start with "I" or "we"
+- End with a short punchy insight — no generic filler
+- Output ONLY the tweet text, nothing else"""
+
+
+def generate_correlation_tweet(correlation_data: dict) -> str:
+    """Generate a narrative tweet about a cross-token correlation event."""
+    tokens = correlation_data.get("tokens", [])
+    event_type = correlation_data.get("event_type", "multi_pump")
+    magnitude = correlation_data.get("magnitude", 0)
+
+    data_lines = [f"CORRELATION EVENT TYPE: {event_type} (average magnitude: {magnitude:.1f})"]
+    data_lines.append("TOKENS INVOLVED (use these exact numbers):")
+    for t in tokens:
+        name    = t.get("name", "?").upper()
+        chg_1h  = t.get("price_change_1h")
+        chg_24h = t.get("price_change_24h")
+        mc      = t.get("market_cap") or 0
+        vol_1h  = t.get("volume_1h")
+        mc_str  = f"${mc/1e6:.2f}M" if mc >= 1e6 else f"${mc:,.0f}"
+        line = f"  ${name}: MC={mc_str}"
+        if chg_1h  is not None: line += f" 1h:{chg_1h:+.1f}%"
+        if chg_24h is not None: line += f" 24h:{chg_24h:+.1f}%"
+        if vol_1h:              line += f" vol1h:${vol_1h:,.0f}"
+        data_lines.append(line)
+
+    user_message = "\n".join(data_lines)
+    tweet = _call_claude(_CORRELATION_TWEET_PROMPT, user_message, max_tokens=120)
+    if len(tweet) > 280:
+        tweet = _call_claude(
+            _CORRELATION_TWEET_PROMPT,
+            user_message + "\n\nIMPORTANT: Must be under 280 characters.",
+            max_tokens=120,
+        )
+    return tweet.strip('"').strip()
+
+
+_STAKING_TWEET_PROMPT = """You are @printrglazr, the Printr ecosystem's most vocal hype machine.
+
+TASK: Write a single original tweet (max 280 chars) about Printr POB staking metrics.
+
+RULES:
+- Sound like someone who just realized how much conviction is locked in this ecosystem
+- Use the EXACT numbers from the data — never invent stats or APY figures
+- Highlight the top 2-3 staking tokens: % of supply locked and total staked USD value
+- Frame the narrative: POB staking = real yield from trading fees (not printed emissions), it's a conviction signal, Printr is becoming the yield layer for memes
+- Do NOT use hashtags
+- Do NOT use quotation marks around the tweet
+- Do NOT start with "I" or "we"
+- Output ONLY the tweet text, nothing else"""
+
+
+def generate_staking_tweet(staking_tokens: list[dict], health: dict) -> str:
+    """Generate a staking leaderboard tweet from ranked staking data."""
+    data_lines = ["POB STAKING LEADERBOARD (use exact numbers, do not invent APY):"]
+    for t in staking_tokens[:5]:
+        name    = t.get("name", "?").upper()
+        pct     = t.get("staking_pct") or 0.0
+        usd     = t.get("total_staked_usd") or 0.0
+        mc      = t.get("market_cap") or 0.0
+        mc_str  = f"${mc/1e6:.2f}M"  if mc  >= 1e6 else f"${mc:,.0f}"
+        usd_str = f"${usd/1e6:.2f}M" if usd >= 1e6 else f"${usd:,.0f}"
+        data_lines.append(f"  ${name}: {pct:.0f}% of supply locked | {usd_str} staked | MC={mc_str}")
+
+    total_staked = health.get("total_staked_usd", 0)
+    total_staked_str = f"${total_staked/1e6:.2f}M" if total_staked >= 1e6 else f"${total_staked:,.0f}"
+    data_lines.append(f"TOTAL ECOSYSTEM STAKED: {total_staked_str}")
+
+    user_message = "\n".join(data_lines)
+    tweet = _call_claude(_STAKING_TWEET_PROMPT, user_message, max_tokens=120)
+    if len(tweet) > 280:
+        tweet = _call_claude(
+            _STAKING_TWEET_PROMPT,
+            user_message + "\n\nIMPORTANT: Must be under 280 characters.",
+            max_tokens=120,
+        )
+    return tweet.strip('"').strip()
+
+
 def _get_tier(score: int) -> str:
     if score <= 20:
         return "Casual Mention"

@@ -181,6 +181,32 @@ def init_db():
             );
         """)
 
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS correlation_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT,
+                tokens_involved TEXT,
+                magnitude REAL,
+                detected_at TEXT DEFAULT (datetime('now')),
+                tweeted_about INTEGER DEFAULT 0,
+                tweeted_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_correlation_detected ON correlation_events(detected_at);
+
+            CREATE TABLE IF NOT EXISTS staking_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_name TEXT,
+                contract_address TEXT,
+                staked_pct REAL,
+                total_staked_usd REAL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_staking_created ON staking_snapshots(created_at);
+
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_correlation_tweet_at', '');
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_staking_tweet_at', '');
+        """)
+
 
 # --- replied_tweets ---
 
@@ -692,3 +718,55 @@ def get_ecosystem_context_age_hours() -> float | None:
             return (datetime.now(timezone.utc) - fetched).total_seconds() / 3600
         except (ValueError, TypeError):
             return None
+
+
+# --- correlation_events ---
+
+def record_correlation_event(event_type: str, tokens_involved: list[str], magnitude: float) -> int:
+    with db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO correlation_events (event_type, tokens_involved, magnitude)
+               VALUES (?, ?, ?)""",
+            (event_type, json.dumps(tokens_involved), magnitude)
+        )
+        return cursor.lastrowid
+
+
+def mark_correlation_tweeted(event_id: int):
+    with db() as conn:
+        conn.execute(
+            """UPDATE correlation_events
+               SET tweeted_about = 1, tweeted_at = datetime('now')
+               WHERE id = ?""",
+            (event_id,)
+        )
+
+
+def get_last_correlation_tweet_time() -> str | None:
+    val = get_state("last_correlation_tweet_at")
+    return val if val else None
+
+
+def set_last_correlation_tweet_time():
+    set_state("last_correlation_tweet_at", datetime.now(timezone.utc).isoformat())
+
+
+# --- staking_snapshots ---
+
+def record_staking_snapshot(token_name: str, contract_address: str,
+                             staked_pct: float | None, total_staked_usd: float | None):
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO staking_snapshots (token_name, contract_address, staked_pct, total_staked_usd)
+               VALUES (?, ?, ?, ?)""",
+            (token_name, contract_address, staked_pct, total_staked_usd)
+        )
+
+
+def get_last_staking_tweet_time() -> str | None:
+    val = get_state("last_staking_tweet_at")
+    return val if val else None
+
+
+def set_last_staking_tweet_time():
+    set_state("last_staking_tweet_at", datetime.now(timezone.utc).isoformat())
