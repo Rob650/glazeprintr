@@ -61,6 +61,23 @@ def init_db():
         conn.commit()
 
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS burn_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT,
+                contract_address TEXT,
+                tx_hash TEXT UNIQUE,
+                burned_amount REAL,
+                bought_back_amount REAL,
+                block_timestamp TEXT,
+                detected_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                tweeted_about INTEGER DEFAULT 0,
+                tweeted_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_burn_detected ON burn_events(detected_at);
+        """)
+        conn.commit()
+
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS whale_wallets (
                 address TEXT PRIMARY KEY,
                 label TEXT,
@@ -890,6 +907,51 @@ def get_last_staking_tweet_time() -> str:
 
 def set_last_staking_tweet_time() -> None:
     set_state("last_staking_tweet_time", datetime.now(timezone.utc).isoformat())
+
+
+def record_burn_event(ticker: str, contract_address: str, tx_hash: str,
+                      burned_amount: float, bought_back_amount: float,
+                      block_timestamp: str) -> bool:
+    """Insert a new burn event. Returns True if new (deduped by tx_hash)."""
+    with db() as conn:
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO burn_events
+               (ticker, contract_address, tx_hash, burned_amount, bought_back_amount, block_timestamp)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (ticker.lower(), contract_address, tx_hash, burned_amount, bought_back_amount, block_timestamp)
+        )
+        return cursor.rowcount == 1
+
+
+def get_untweeted_burns(min_burned: float = 0) -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT id, ticker, contract_address, tx_hash,
+                      burned_amount, bought_back_amount, block_timestamp
+               FROM burn_events
+               WHERE tweeted_about = 0 AND burned_amount >= ?
+               ORDER BY detected_at ASC""",
+            (min_burned,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_burn_tweeted(burn_id: int) -> None:
+    with db() as conn:
+        conn.execute(
+            "UPDATE burn_events SET tweeted_about = 1, tweeted_at = datetime('now') WHERE id = ?",
+            (burn_id,)
+        )
+
+
+def count_burn_tweets_last_hour() -> int:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) FROM burn_events
+               WHERE tweeted_about = 1
+               AND tweeted_at >= datetime('now', '-1 hour')"""
+        ).fetchone()
+        return row[0] if row else 0
 
 
 def get_ecosystem_context_age_hours() -> float | None:

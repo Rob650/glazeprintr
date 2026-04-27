@@ -12,6 +12,7 @@ Refresh cycle: every 15 minutes via APScheduler (see main.py).
 """
 
 import logging
+import os
 import random
 import time
 from datetime import datetime, timezone
@@ -364,6 +365,24 @@ class EcosystemIntelligence:
             f"(momentum {h.get('ecosystem_momentum_score', 50):.0f}/100)"
         )
 
+        # Staking rewards context (Feature: ENABLE_REWARDS_DATA)
+        rewards = h.get("rewards_summary")
+        if rewards:
+            sol_total = rewards.get("total_unclaimed_sol", 0)
+            sol_claimed = rewards.get("total_claimed_sol", 0)
+            if sol_total > 0 or sol_claimed > 0:
+                lines.append(
+                    f"POB REWARDS: {sol_total:.2f} SOL unclaimed | "
+                    f"{sol_claimed:.2f} SOL claimed to date"
+                )
+            top = rewards.get("top_tokens_by_unclaimed", [])
+            if top:
+                top_str = ", ".join(
+                    f"${t['ticker'].upper()} ({t['unclaimed_sol']:.2f} SOL)"
+                    for t in top[:3]
+                )
+                lines.append(f"  Top unclaimed rewards: {top_str}")
+
         return "\n".join(lines)
 
 
@@ -398,6 +417,52 @@ def get_macro_context(trending: str = "flat") -> str:
     return "\n".join(parts)
 
 
+# ── Staking rewards summary ───────────────────────────────────────────────────
+
+
+def get_rewards_summary() -> dict:
+    """
+    Aggregate staking rewards across all known tokens.
+    Returns total unclaimed SOL rewards, total claimed, and top tokens by unclaimed.
+    Requires ENABLE_REWARDS_DATA=true.
+    """
+    if os.environ.get("ENABLE_REWARDS_DATA", "false").lower() != "true":
+        return {}
+
+    from scraper import KNOWN_CONTRACTS
+    from printr_api import fetch_positions_with_rewards
+
+    total_unclaimed_sol = 0.0
+    total_claimed_sol = 0.0
+    per_token: dict[str, float] = {}
+
+    for ticker, mint_address in KNOWN_CONTRACTS.items():
+        try:
+            positions = fetch_positions_with_rewards(mint_address)
+        except Exception as exc:
+            logger.debug(f"get_rewards_summary: fetch failed for {ticker}: {exc}")
+            continue
+
+        token_unclaimed = 0.0
+        for pos in positions:
+            if pos.get("was_closed"):
+                continue
+            token_unclaimed += float(pos.get("claimable_quote_rewards") or 0)
+            total_claimed_sol += float(pos.get("claimed_quote_rewards") or 0)
+        total_unclaimed_sol += token_unclaimed
+        if token_unclaimed > 0:
+            per_token[ticker] = token_unclaimed
+
+    top_tokens = sorted(per_token.items(), key=lambda x: x[1], reverse=True)[:5]
+    return {
+        "total_unclaimed_sol": total_unclaimed_sol,
+        "total_claimed_sol": total_claimed_sol,
+        "top_tokens_by_unclaimed": [
+            {"ticker": t, "unclaimed_sol": v} for t, v in top_tokens
+        ],
+    }
+
+
 # ── Cache management ──────────────────────────────────────────────────────────
 
 
@@ -427,8 +492,20 @@ async def refresh_intelligence(
         return _cached_intelligence
 
     try:
+        import asyncio
         intel = EcosystemIntelligence(projects)
         _cached_intelligence = intel
+
+        # Enrich with staking rewards data if feature is on
+        if os.environ.get("ENABLE_REWARDS_DATA", "false").lower() == "true":
+            loop = asyncio.get_running_loop()
+            try:
+                rewards = await loop.run_in_executor(None, get_rewards_summary)
+                if rewards:
+                    intel.health["rewards_summary"] = rewards
+            except Exception as exc:
+                logger.warning(f"intelligence.refresh: rewards summary failed: {exc}")
+
         pumping = len(intel.top_movers["pumping"])
         anomaly = len(intel.top_movers["volume_anomaly"])
         breakout = len(intel.top_movers["breakout"])

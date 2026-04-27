@@ -195,6 +195,49 @@ async def fetch_staking_totals_async(max_pages: int = 60, page_size: int = 100) 
     return await loop.run_in_executor(None, lambda: fetch_staking_totals_sync(max_pages, page_size))
 
 
+def _post_api_public(path: str, payload: dict, timeout: int = 20) -> Optional[dict]:
+    """POST to a Printr API endpoint that requires no auth. Returns parsed JSON or None."""
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        f"{_PRINTR_API_BASE}{path}",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": _REQ_UA,
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        logger.debug(f"Printr API (public) {path}: HTTP {e.code}")
+    except Exception as e:
+        logger.debug(f"Printr API (public) {path}: {e}")
+    return None
+
+
+def fetch_buyback_burns(mint_address: str) -> list[dict]:
+    """POST /v1/telecoin/buyback-burn-detail — returns burn tx history for a token (no auth)."""
+    data = _post_api_public("/telecoin/buyback-burn-detail", {"mint_address": mint_address})
+    if not data:
+        return []
+    if isinstance(data, list):
+        return data
+    return data.get("burns") or data.get("data") or []
+
+
+def fetch_positions_with_rewards(mint_address: str) -> list[dict]:
+    """POST /v1/staking/list-positions-with-rewards — positions with claimable reward data (no auth)."""
+    data = _post_api_public("/staking/list-positions-with-rewards", {"mint_address": mint_address, "limit": 100})
+    if not data:
+        return []
+    if isinstance(data, list):
+        return data
+    return data.get("positions") or data.get("data") or []
+
+
 # ---------------------------------------------------------------------------
 # Token discovery from staking data
 # ---------------------------------------------------------------------------

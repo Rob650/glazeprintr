@@ -25,6 +25,7 @@ from database import (
     record_correlation_event, mark_correlation_tweeted, get_last_correlation_tweet_time,
     set_last_correlation_tweet_time, record_staking_snapshot,
     get_last_staking_tweet_time, set_last_staking_tweet_time,
+    get_untweeted_burns, mark_burn_tweeted, count_burn_tweets_last_hour,
 )
 import launch_detector
 from claude_client import (
@@ -32,6 +33,7 @@ from claude_client import (
     classify_tweet_intent, generate_quote_tweet, generate_thread_tweets,
     _OTHER_TICKERS, _pick_meme, score_sentiment,
     generate_correlation_tweet, generate_staking_tweet,
+    generate_burn_tweet, generate_launch_guide,
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
@@ -53,8 +55,13 @@ ENABLE_LAUNCH_DETECTION = os.environ.get("ENABLE_LAUNCH_DETECTION", "false").low
 ENABLE_WHALE_TRACKING = os.environ.get("ENABLE_WHALE_TRACKING", "false").lower() == "true"
 ENABLE_SENTIMENT_SCORING = os.environ.get("ENABLE_SENTIMENT_SCORING", "false").lower() == "true"
 ENABLE_COMPETITOR_DATA = os.environ.get("ENABLE_COMPETITOR_DATA", "false").lower() == "true"
+ENABLE_BURN_TRACKING = os.environ.get("ENABLE_BURN_TRACKING", "false").lower() == "true"
+ENABLE_REWARDS_DATA = os.environ.get("ENABLE_REWARDS_DATA", "false").lower() == "true"
+ENABLE_LAUNCH_GUIDE = os.environ.get("ENABLE_LAUNCH_GUIDE", "false").lower() == "true"
 MAX_LAUNCH_ALERTS_PER_HOUR = 2
 MAX_WHALE_TWEETS_PER_HOUR = 3
+MAX_BURN_TWEETS_PER_HOUR = 2
+_BURN_MIN_USD = 100.0
 ENABLE_THREAD_MODE = os.environ.get("ENABLE_THREAD_MODE", "false").lower() == "true"
 ENABLE_CORRELATION_TWEETS = os.environ.get("ENABLE_CORRELATION_TWEETS", "false").lower() == "true"
 ENABLE_STAKING_TWEETS = os.environ.get("ENABLE_STAKING_TWEETS", "false").lower() == "true"
@@ -76,6 +83,16 @@ _keyword_search_since_id_loaded: bool = False
 
 SKIP_HANDLES = {"printrglazr", "printr_money"}
 MAX_MENTION_AGE_MINUTES = 120
+
+_LAUNCH_KEYWORDS = frozenset([
+    "launch", "deploy", "create token", "make a coin", "start a token",
+    "new token", "how to launch", "want to launch",
+])
+
+
+def _has_launch_intent(text: str) -> bool:
+    lower = text.lower()
+    return any(kw in lower for kw in _LAUNCH_KEYWORDS)
 
 ECOSYSTEM_TOKENS = [
     "belief", "ooo", "rotus", "fatchoi", "deployr", "patapim",
@@ -269,39 +286,53 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
         thread_context = _get_thread_context(tweet)
     memory_context = mem.get_memory_context()
 
-    token_data = None
-    try:
-        token_data = _get_tweet_token_data(tweet_text)
-        if token_data:
-            logger.info(f"Got token data for reply: {token_data.get('name')} mc={token_data.get('market_cap')}")
-            # Enrich with ecosystem intelligence metadata (rank, flags, heat score, tier)
-            cached_intel = intel_mod.get_intelligence()
-            if cached_intel:
-                intel_record = cached_intel.get_token_intelligence(token_data.get("name", ""))
-                if intel_record:
-                    token_data["ecosystem_rank"] = intel_record.get("ecosystem_rank")
-                    token_data["mover_flags"]    = intel_record.get("mover_flags", [])
-                    token_data["mc_tier"]        = intel_record.get("mc_tier")
-                    token_data["heat_score"]     = intel_record.get("heat_score")
-    except Exception as e:
-        logger.warning(f"Token lookup failed for tweet {tweet['id']}: {e}")
+    # Feature: Launch Guide Mode — intercept before normal reply if launch intent detected
+    reply_text = None
+    mode = None
+    if ENABLE_LAUNCH_GUIDE and _has_launch_intent(tweet_text):
+        try:
+            reply_text = generate_launch_guide(tweet_text, author_handle)
+            mode = "launch_guide"
+            logger.info(f"Launch guide reply for @{author_handle}: {reply_text[:60]}...")
+        except Exception as e:
+            logger.error(f"Launch guide generation failed for {tweet['id']}: {e}")
+            reply_text = None
+            mode = None
 
-    try:
-        reply_text, mode = generate_reply(
-            tweet_text,
-            author_handle,
-            thread_context=thread_context,
-            memory_context=memory_context,
-            token_data=token_data,
-            ecosystem_comparative=_get_ecosystem_context_str(),
-            dune_context=_latest_dune_context,
-        )
-    except Exception as e:
-        logger.error(f"Claude error for tweet {tweet['id']}: {e}")
-        return
+    if reply_text is None:
+        token_data = None
+        try:
+            token_data = _get_tweet_token_data(tweet_text)
+            if token_data:
+                logger.info(f"Got token data for reply: {token_data.get('name')} mc={token_data.get('market_cap')}")
+                # Enrich with ecosystem intelligence metadata (rank, flags, heat score, tier)
+                cached_intel = intel_mod.get_intelligence()
+                if cached_intel:
+                    intel_record = cached_intel.get_token_intelligence(token_data.get("name", ""))
+                    if intel_record:
+                        token_data["ecosystem_rank"] = intel_record.get("ecosystem_rank")
+                        token_data["mover_flags"]    = intel_record.get("mover_flags", [])
+                        token_data["mc_tier"]        = intel_record.get("mc_tier")
+                        token_data["heat_score"]     = intel_record.get("heat_score")
+        except Exception as e:
+            logger.warning(f"Token lookup failed for tweet {tweet['id']}: {e}")
+
+        try:
+            reply_text, mode = generate_reply(
+                tweet_text,
+                author_handle,
+                thread_context=thread_context,
+                memory_context=memory_context,
+                token_data=token_data,
+                ecosystem_comparative=_get_ecosystem_context_str(),
+                dune_context=_latest_dune_context,
+            )
+        except Exception as e:
+            logger.error(f"Claude error for tweet {tweet['id']}: {e}")
+            return
 
     ticker = _extract_token(tweet_text)
-    img_path = _pick_meme(ticker) if ticker else None
+    img_path = _pick_meme(ticker) if ticker and mode != "launch_guide" else None
 
     our_reply_id = None
     if DRY_RUN:
@@ -971,6 +1002,77 @@ def poll_whale_activity():
             logger.info(f"Whale alert posted: ${ticker.upper()} {action} ${amount_usd:,.0f} tweet_id={tweet_id}")
 
         mark_whale_transaction_tweeted(tx["id"])
+
+
+async def poll_burn_events():
+    """Detect new buyback & burn events and post alert tweets. No-op when flag is off."""
+    if not ENABLE_BURN_TRACKING:
+        return
+
+    if is_paused():
+        logger.info("Bot paused — skipping burn events poll")
+        return
+
+    import burn_tracker
+
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(None, burn_tracker.detect_new_burns)
+    except Exception as e:
+        logger.error(f"burn_tracker.detect_new_burns error: {e}")
+        return
+
+    tweets_this_hour = count_burn_tweets_last_hour()
+    if tweets_this_hour >= MAX_BURN_TWEETS_PER_HOUR:
+        logger.info(f"Burn tweet rate limit reached ({tweets_this_hour}/{MAX_BURN_TWEETS_PER_HOUR}/hr) — skipping")
+        return
+
+    untweeted = get_untweeted_burns()
+    if not untweeted:
+        logger.info("No untweeted burn events to post")
+        return
+
+    for burn in untweeted:
+        if count_burn_tweets_last_hour() >= MAX_BURN_TWEETS_PER_HOUR:
+            logger.info("Burn tweet rate limit reached mid-batch — stopping")
+            break
+
+        ticker = burn["ticker"]
+        burned_amount = burn["burned_amount"]
+
+        # Only tweet significant burns (estimate USD value from cached price data)
+        burned_usd = 0.0
+        token_metrics = _get_token_metrics(ticker)
+        if token_metrics and token_metrics.get("price") and burned_amount > 0:
+            burned_usd = token_metrics["price"] * burned_amount
+        if 0 < burned_usd < _BURN_MIN_USD:
+            logger.info(
+                f"Skipping burn for ${ticker.upper()} — est. ${burned_usd:.2f} < ${_BURN_MIN_USD} threshold"
+            )
+            mark_burn_tweeted(burn["id"])
+            continue
+
+        try:
+            tweet_text = generate_burn_tweet(burn)
+        except Exception as e:
+            logger.error(f"Burn tweet generation failed for ${ticker.upper()}: {e}")
+            mark_burn_tweeted(burn["id"])
+            continue
+
+        if DRY_RUN:
+            logger.info(
+                f"[DRY RUN] Burn tweet ${ticker.upper()} burned={burned_amount:,.0f}: {tweet_text[:100]}..."
+            )
+        else:
+            tweet_id = post_tweet(tweet_text)
+            if not tweet_id:
+                logger.warning(f"Burn tweet post failed for ${ticker.upper()}")
+                continue
+            logger.info(
+                f"Burn alert posted: ${ticker.upper()} burned={burned_amount:,.0f} tweet_id={tweet_id}"
+            )
+
+        mark_burn_tweeted(burn["id"])
 
 
 ECOSYSTEM_ACCOUNTS = ["masterprintr", "printr"]

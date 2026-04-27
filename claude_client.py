@@ -1432,6 +1432,67 @@ _CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 _RETRY_STATUS_CODES = {429, 500, 529}
 
 
+_BURN_TWEET_SYSTEM = (
+    SYSTEM_PROMPT_BASE + "\n\n"
+    "MODE: Buyback & Burn Alert — deflationary conviction signal\n\n"
+    "You are reporting a buyback & burn event for a Printr ecosystem token.\n"
+    "Generate a punchy tweet that:\n"
+    "- Leads with the token name and burned amount\n"
+    "- Frames it as deflationary/bullish: supply shrinking, demand-side pressure\n"
+    "- References the buyback mechanism naturally (protocol uses fees to buy and burn)\n"
+    "- Under 240 chars. Glaze vocab mandatory. No URLs. No contract addresses.\n"
+    "Example: '$FATCHOI just burned 50K tokens — supply shrinking while demand grows 🖨️'\n"
+    "Reply ONLY with the tweet text."
+)
+
+_LAUNCH_GUIDE_SYSTEM = (
+    SYSTEM_PROMPT_BASE + "\n\n"
+    "MODE: Launch Guide — helpful community reply\n\n"
+    "Someone just asked about launching a token on Printr. Give them a genuinely "
+    "helpful, conversational reply that:\n"
+    "- Points them to printr.money (write as plain text, no https://)\n"
+    "- Recommends the POB fee model (100% of fees go to stakers)\n"
+    "- Mentions 180-day lock for the 2.5x multiplier as the max staking setting\n"
+    "- Highlights anti-snipe protection as a key Printr advantage\n"
+    "- Sounds like a friendly community member, not a spammer\n"
+    "- Under 280 characters total\n"
+    "- Uses glaze vocabulary naturally (no forced overuse)\n"
+    "Reply ONLY with the tweet text. No quotes, no explanation."
+)
+
+
+def generate_burn_tweet(burn_data: dict) -> str:
+    """Generate a tweet announcing a buyback & burn event."""
+    ticker = burn_data.get("ticker", "TOKEN").upper()
+    burned = float(burn_data.get("burned_amount") or 0)
+    bought_back = float(burn_data.get("bought_back_amount") or 0)
+
+    context = (
+        f"BURN EVENT — ${ticker}:\n"
+        f"  Burned: {burned:,.0f} tokens\n"
+        f"  Bought back: {bought_back:,.0f} tokens\n"
+        f"Generate a tweet about this buyback & burn event. "
+        f"Lead with ${ticker} and the burned amount. "
+        f"Frame it bullishly — deflationary signal, supply shrinking. "
+        f"Max 240 chars. Glaze vocab mandatory.\n"
+        f"Reply ONLY with the tweet text."
+    )
+    return _clean_reply(_call_claude(_BURN_TWEET_SYSTEM, context, max_tokens=150))
+
+
+def generate_launch_guide(tweet_text: str, author: str) -> str:
+    """Generate a helpful reply for someone asking about launching a token on Printr."""
+    user_message = (
+        f'Tweet from @{author}:\n"{tweet_text}"\n\n'
+        "They're asking about launching a token. Give them a helpful, "
+        "conversational guide reply pointing them to Printr. "
+        "Under 280 chars. Sound like a community member, not a bot. "
+        "Reply ONLY with the tweet text."
+    )
+    tweet = _call_claude(_LAUNCH_GUIDE_SYSTEM, user_message, max_tokens=150)
+    return _clean_reply(tweet)
+
+
 def _call_claude(system: str, user_message: str, max_tokens: int = 150) -> str:
     last_exc = None
     for attempt in range(3):
