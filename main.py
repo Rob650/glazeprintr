@@ -21,6 +21,8 @@ logger = logging.getLogger("glazeprintr")
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
 DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
 ENABLE_LAUNCH_DETECTION = os.environ.get("ENABLE_LAUNCH_DETECTION", "false").lower() == "true"
+ENABLE_WHALE_TRACKING = os.environ.get("ENABLE_WHALE_TRACKING", "false").lower() == "true"
+ENABLE_COMPETITOR_DATA = os.environ.get("ENABLE_COMPETITOR_DATA", "false").lower() == "true"
 
 scheduler = AsyncIOScheduler()
 
@@ -72,9 +74,23 @@ async def lifespan(app: FastAPI):
     if ENABLE_LAUNCH_DETECTION:
         scheduler.add_job(bot.poll_new_launches, "interval", minutes=10, id="launch_detector", replace_existing=True,
                           max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    if ENABLE_WHALE_TRACKING:
+        scheduler.add_job(bot.poll_whale_activity, "interval", minutes=15, id="whale_tracker", replace_existing=True,
+                          max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    if ENABLE_COMPETITOR_DATA:
+        from competitor_tracker import refresh_competitor_stats
+        scheduler.add_job(refresh_competitor_stats, "interval", hours=2, id="competitor_refresher", replace_existing=True,
+                          max_instances=1, coalesce=True, misfire_grace_time=300, next_run_time=_now)
     scheduler.start()
     launch_detection_status = "launch detection (10 min)" if ENABLE_LAUNCH_DETECTION else "launch detection DISABLED"
-    logger.info(f"Schedulers started: mentions (5 min), QT glazer (30 min), original tweets (60 min), intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h), {launch_detection_status} — list poller DISABLED, follower scan DISABLED")
+    whale_status = "whale tracking (15 min)" if ENABLE_WHALE_TRACKING else "whale tracking DISABLED"
+    competitor_status = "competitor stats (2h)" if ENABLE_COMPETITOR_DATA else "competitor stats DISABLED"
+    logger.info(
+        f"Schedulers started: mentions (5 min), QT glazer (30 min), original tweets (60 min), "
+        f"intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h), "
+        f"{launch_detection_status}, {whale_status}, {competitor_status} — "
+        f"list poller DISABLED, follower scan DISABLED"
+    )
 
     yield
 

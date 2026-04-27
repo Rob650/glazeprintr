@@ -61,6 +61,41 @@ def init_db():
         conn.commit()
 
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS whale_wallets (
+                address TEXT PRIMARY KEY,
+                label TEXT,
+                first_seen TEXT DEFAULT (datetime('now')),
+                total_transactions INTEGER DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS whale_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wallet_address TEXT,
+                token_ticker TEXT,
+                action TEXT,
+                amount_usd REAL,
+                detected_at TEXT DEFAULT (datetime('now')),
+                tweeted_about INTEGER DEFAULT 0,
+                tweeted_at TEXT,
+                UNIQUE(wallet_address, token_ticker)
+            );
+            CREATE INDEX IF NOT EXISTS idx_whale_tx_detected ON whale_transactions(detected_at);
+
+            CREATE TABLE IF NOT EXISTS competitor_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform TEXT,
+                date TEXT,
+                launches_24h INTEGER DEFAULT 0,
+                rugs_24h INTEGER DEFAULT 0,
+                avg_survival_hours REAL DEFAULT 0,
+                survival_rate_pct REAL DEFAULT 0,
+                recorded_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(platform, date)
+            );
+        """)
+        conn.commit()
+
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS detected_launches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 contract_address TEXT UNIQUE,
@@ -675,6 +710,80 @@ def count_launch_alerts_last_hour() -> int:
                AND tweeted_at >= datetime('now', '-1 hour')"""
         ).fetchone()
         return row[0] if row else 0
+
+
+def upsert_whale_wallet(address: str, label: str) -> None:
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO whale_wallets (address, label) VALUES (?, ?)
+               ON CONFLICT(address) DO UPDATE SET total_transactions = total_transactions + 1""",
+            (address, label)
+        )
+
+
+def record_whale_transaction(wallet_address: str, token_ticker: str, action: str, amount_usd: float) -> bool:
+    """Record a detected whale move. Returns True if new (deduped per wallet+token per hour)."""
+    with db() as conn:
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO whale_transactions
+               (wallet_address, token_ticker, action, amount_usd)
+               VALUES (?, ?, ?, ?)""",
+            (wallet_address, token_ticker, action, amount_usd)
+        )
+        return cursor.rowcount == 1
+
+
+def get_untweeted_whale_transactions(limit: int = 5) -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT id, wallet_address, token_ticker, action, amount_usd, detected_at
+               FROM whale_transactions
+               WHERE tweeted_about = 0
+               AND detected_at >= datetime('now', '-2 hours')
+               ORDER BY amount_usd DESC
+               LIMIT ?""",
+            (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_whale_transaction_tweeted(tx_id: int) -> None:
+    with db() as conn:
+        conn.execute(
+            "UPDATE whale_transactions SET tweeted_about = 1, tweeted_at = datetime('now') WHERE id = ?",
+            (tx_id,)
+        )
+
+
+def count_whale_tweets_last_hour() -> int:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) FROM whale_transactions
+               WHERE tweeted_about = 1
+               AND tweeted_at >= datetime('now', '-1 hour')"""
+        ).fetchone()
+        return row[0] if row else 0
+
+
+def upsert_competitor_stats(platform: str, date: str, launches_24h: int, rugs_24h: int,
+                             avg_survival_hours: float, survival_rate_pct: float) -> None:
+    with db() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO competitor_stats
+               (platform, date, launches_24h, rugs_24h, avg_survival_hours, survival_rate_pct)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (platform, date, launches_24h, rugs_24h, avg_survival_hours, survival_rate_pct)
+        )
+
+
+def get_latest_competitor_stats(platform: str) -> dict | None:
+    with db() as conn:
+        row = conn.execute(
+            """SELECT platform, date, launches_24h, rugs_24h, avg_survival_hours, survival_rate_pct, recorded_at
+               FROM competitor_stats WHERE platform = ? ORDER BY recorded_at DESC LIMIT 1""",
+            (platform,)
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def get_ecosystem_context_age_hours() -> float | None:

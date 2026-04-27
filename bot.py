@@ -19,12 +19,13 @@ from database import (
     try_claim_quote, record_quote_tweet,
     get_qt_glazer_since_id, set_qt_glazer_since_id,
     count_launch_alerts_last_hour, get_untweeted_launches, mark_launch_tweeted,
+    get_untweeted_whale_transactions, mark_whale_transaction_tweeted, count_whale_tweets_last_hour,
 )
 import launch_detector
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
     classify_tweet_intent, generate_quote_tweet,
-    _OTHER_TICKERS, _pick_meme,
+    _OTHER_TICKERS, _pick_meme, score_sentiment,
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
@@ -43,7 +44,11 @@ QT_GLAZER_LIST_ID = os.environ.get("QT_GLAZER_LIST_ID", "2048242501333799282")
 MAX_REPLIES_PER_ACCOUNT_HOUR = int(os.environ.get("MAX_REPLIES_PER_ACCOUNT_HOUR", "5"))
 MAX_SCORES_PER_DAY = int(os.environ.get("MAX_SCORES_PER_DAY", "20"))
 ENABLE_LAUNCH_DETECTION = os.environ.get("ENABLE_LAUNCH_DETECTION", "false").lower() == "true"
+ENABLE_WHALE_TRACKING = os.environ.get("ENABLE_WHALE_TRACKING", "false").lower() == "true"
+ENABLE_SENTIMENT_SCORING = os.environ.get("ENABLE_SENTIMENT_SCORING", "false").lower() == "true"
+ENABLE_COMPETITOR_DATA = os.environ.get("ENABLE_COMPETITOR_DATA", "false").lower() == "true"
 MAX_LAUNCH_ALERTS_PER_HOUR = 2
+MAX_WHALE_TWEETS_PER_HOUR = 3
 
 _BOT_START_TIME = datetime.now(timezone.utc)
 
@@ -780,6 +785,14 @@ def poll_qt_glazer_list():
     except Exception as e:
         logger.warning(f"QT token lookup failed for {tweet_id}: {e}")
 
+    sentiment = "neutral"
+    if ENABLE_SENTIMENT_SCORING:
+        try:
+            sentiment = score_sentiment(tweet_text)
+            logger.info(f"QT sentiment for {tweet_id}: {sentiment}")
+        except Exception as e:
+            logger.warning(f"QT sentiment scoring failed for {tweet_id}: {e}")
+
     try:
         quote_text, _ = generate_quote_tweet(
             tweet_text,
@@ -787,6 +800,7 @@ def poll_qt_glazer_list():
             token_data=token_data,
             ecosystem_comparative=_get_ecosystem_context_str(),
             dune_context=_latest_dune_context,
+            sentiment=sentiment,
         )
     except Exception as e:
         logger.error(f"QT Claude error for {tweet_id}: {e}")
@@ -872,6 +886,75 @@ async def poll_new_launches():
             _kc[ticker.lower()] = contract
             _c2n[contract] = ticker.lower()
             logger.info(f"Registered ${ticker.upper()} ({contract}) in KNOWN_CONTRACTS for intelligence tracking")
+
+
+def poll_whale_activity():
+    """Detect large whale moves and post alert tweets. No-op when flag is off."""
+    if not ENABLE_WHALE_TRACKING:
+        return
+
+    if is_paused():
+        logger.info("Bot paused — skipping whale activity poll")
+        return
+
+    import whale_tracker
+
+    try:
+        whale_tracker.detect_whale_activity()
+    except Exception as e:
+        logger.error(f"whale_tracker.detect_whale_activity error: {e}")
+        return
+
+    tweets_this_hour = count_whale_tweets_last_hour()
+    if tweets_this_hour >= MAX_WHALE_TWEETS_PER_HOUR:
+        logger.info(f"Whale tweet rate limit reached ({tweets_this_hour}/{MAX_WHALE_TWEETS_PER_HOUR}/hr) — skipping")
+        return
+
+    untweeted = get_untweeted_whale_transactions(max_count=MAX_WHALE_TWEETS_PER_HOUR - tweets_this_hour)
+    if not untweeted:
+        logger.info("No untweeted whale moves to post")
+        return
+
+    from claude_client import _call_claude, SYSTEM_PROMPT_BASE
+
+    for tx in untweeted:
+        if count_whale_tweets_last_hour() >= MAX_WHALE_TWEETS_PER_HOUR:
+            logger.info("Whale tweet rate limit reached mid-batch — stopping")
+            break
+
+        ticker = tx["token_ticker"]
+        action = tx["action"]
+        amount_usd = tx["amount_usd"]
+
+        context = (
+            f"WHALE ALERT — ${ticker.upper()}:\n"
+            f"  Action: {action} (large wallet activity detected)\n"
+            f"  1h volume: ${amount_usd:,.0f}\n"
+            f"Generate a tweet about this whale activity. "
+            f"Example: 'Top ${ticker.upper()} wallet just {'moved in' if action == 'BUY' else 'moved out'} "
+            f"${amount_usd:,.0f}. {'Holders accumulating' if action == 'BUY' else 'Smart money rotating'} — watch closely.' "
+            f"Be specific with the dollar amount. {'Bullish spin.' if action == 'BUY' else 'Neutral-observational.'} "
+            f"Max 240 chars. No URLs. Glaze vocab mandatory. Reply ONLY with the tweet text."
+        )
+
+        try:
+            tweet_text = _call_claude(SYSTEM_PROMPT_BASE, context, max_tokens=150)
+            tweet_text = tweet_text.strip()[:280]
+        except Exception as e:
+            logger.error(f"Whale tweet generation failed for ${ticker.upper()}: {e}")
+            mark_whale_transaction_tweeted(tx["id"])
+            continue
+
+        if DRY_RUN:
+            logger.info(f"[DRY RUN] Whale tweet ${ticker.upper()} {action} ${amount_usd:,.0f}: {tweet_text[:100]}...")
+        else:
+            tweet_id = post_tweet(tweet_text)
+            if not tweet_id:
+                logger.warning(f"Whale tweet post failed for ${ticker.upper()}")
+                continue
+            logger.info(f"Whale alert posted: ${ticker.upper()} {action} ${amount_usd:,.0f} tweet_id={tweet_id}")
+
+        mark_whale_transaction_tweeted(tx["id"])
 
 
 ECOSYSTEM_ACCOUNTS = ["masterprintr", "printr"]
@@ -983,7 +1066,16 @@ async def post_original_tweet():
         # Build full ecosystem context: intelligence + comparative stats + occasional macro
         trending = intel.health.get("ecosystem_trending", "flat") if intel else "flat"
         macro_ctx = intel_mod.get_macro_context(trending=trending) if random.random() < 0.35 else ""
-        combined_ctx = "\n\n".join(filter(None, [intel_ctx, comparative_ctx, macro_ctx]))
+
+        competitor_ctx = ""
+        if ENABLE_COMPETITOR_DATA and random.random() < 0.20:
+            try:
+                from competitor_tracker import get_competitor_comparison
+                competitor_ctx = get_competitor_comparison()
+            except Exception as e:
+                logger.warning(f"competitor context failed: {e}")
+
+        combined_ctx = "\n\n".join(filter(None, [intel_ctx, comparative_ctx, macro_ctx, competitor_ctx]))
 
         memory_context = mem.get_memory_context()
         top_tickers = _get_top_tickers(10)
