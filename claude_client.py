@@ -1033,6 +1033,91 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     return tweet, _pick_meme(chosen_ticker)
 
 
+_THREAD_TWEET_SYSTEM = (
+    SYSTEM_PROMPT_BASE + "\n\n"
+    "MODE: Thread — Deep Dive on Big Mover\n\n"
+    "You are generating a 3-tweet thread about a big mover in the Printr ecosystem.\n\n"
+    "THREAD FORMAT:\n"
+    "Output exactly 3 tweets separated by ---\n"
+    "Each tweet must be under 240 characters (strict limit — leave buffer for formatting).\n\n"
+    "Tweet 1: Price action headline. Lead with the most alarming number. "
+    "\"$TOKEN up X% in 24h — [one sharp context line]\" energy. Make it impossible to scroll past.\n\n"
+    "Tweet 2: WHY it's moving. Volume surge, holder growth, staking data, buy/sell pressure, "
+    "liquidity. Lead with data — this should feel like breaking on-chain news. "
+    "Different stat from tweet 1.\n\n"
+    "Tweet 3: Ecosystem context. Connect this move to broader Printr momentum, the macro narrative, "
+    "or the flywheel thesis. End with conviction. LFP energy. Tie it to the bigger picture.\n\n"
+    "THREAD RULES:\n"
+    "- Each tweet must cite at least one real number from the data provided\n"
+    "- Never repeat the same stat across tweets — each tweet reveals new signal\n"
+    "- Apply GLAZE VOCABULARY (glazing, heavy glaze, certified glazer, etc.)\n"
+    "- Use Printr community slang where it fits (LFP, print, 🖨️, POB)\n"
+    "- Each tweet must stand alone AND flow as a thread\n"
+    "- Apply anti-FUD framing: always bullish, no exceptions\n"
+    "- Separate the 3 tweets with --- on its own line. Nothing else."
+)
+
+
+def generate_thread_tweets(token_data: dict, intel_context: str) -> list[str]:
+    """Generate a 3-tweet thread for a big mover. Returns list of tweet strings."""
+    name = token_data.get("name", "TOKEN").upper()
+    chg_24h = token_data.get("price_change_24h")
+    chg_1h = token_data.get("price_change_1h")
+    heat = token_data.get("heat_score", 0)
+    mc = token_data.get("market_cap") or 0
+    vol = token_data.get("volume") or 0
+    vol_1h = token_data.get("volume_1h") or 0
+    staking_pct = token_data.get("staking_pct")
+    holders = token_data.get("holder_count")
+    buys = token_data.get("buys_24h")
+    sells = token_data.get("sells_24h")
+    flags = token_data.get("mover_flags", [])
+
+    data_lines = [f"BIG MOVER FOCUS — ${name} (heat score {heat:.0f}/100, flags: {', '.join(flags) or 'none'}):"]
+    mc_str = f"${mc/1e6:.2f}M" if mc >= 1e6 else f"${mc:,.0f}"
+    data_lines.append(f"  MC={mc_str}")
+    if chg_24h is not None:
+        data_lines.append(f"  24h change: {chg_24h:+.1f}%")
+    if chg_1h is not None:
+        data_lines.append(f"  1h change: {chg_1h:+.1f}%")
+    if vol:
+        vol_str = f"${vol/1e6:.2f}M" if vol >= 1e6 else f"${vol:,.0f}"
+        data_lines.append(f"  24h volume: {vol_str}")
+    if vol_1h:
+        vol1h_str = f"${vol_1h/1e6:.2f}M" if vol_1h >= 1e6 else f"${vol_1h:,.0f}"
+        data_lines.append(f"  1h volume: {vol1h_str}")
+    if staking_pct is not None:
+        data_lines.append(f"  Staked: {staking_pct:.0f}%")
+    if holders:
+        data_lines.append(f"  Holders: {int(holders):,}")
+    if buys is not None and sells is not None:
+        total = buys + sells
+        if total > 0:
+            buy_pct = buys / total * 100
+            data_lines.append(f"  Txns: {total} ({buys}b/{sells}s, {buy_pct:.0f}% buys)")
+
+    user_message = "\n".join(data_lines)
+    if intel_context:
+        user_message += f"\n\n{intel_context}"
+    user_message += (
+        f"\n\nGenerate a 3-tweet thread about ${name} using the data above. "
+        "Separate the 3 tweets with ---\n"
+        "Reply ONLY with the 3 tweets and separators. No quotes, no labels, no explanation."
+    )
+
+    raw = _call_claude(_THREAD_TWEET_SYSTEM, user_message, max_tokens=600)
+
+    parts = [p.strip() for p in raw.split("---") if p.strip()]
+    if len(parts) < 3:
+        logging.getLogger(__name__).warning(
+            f"generate_thread_tweets: expected 3 parts, got {len(parts)} — padding"
+        )
+        while len(parts) < 3:
+            parts.append(parts[-1] if parts else f"${name} is moving. LFP 🖨️")
+
+    return [_clean_reply(p) for p in parts[:3]]
+
+
 def score_glaze(
     tweet_text: str,
     author_handle: str,

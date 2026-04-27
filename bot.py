@@ -19,17 +19,18 @@ from database import (
     try_claim_quote, record_quote_tweet,
     get_qt_glazer_since_id, set_qt_glazer_since_id,
     count_launch_alerts_last_hour, get_untweeted_launches, mark_launch_tweeted,
+    record_thread_post, count_threads_today, record_tweet_performance,
 )
 import launch_detector
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
-    classify_tweet_intent, generate_quote_tweet,
+    classify_tweet_intent, generate_quote_tweet, generate_thread_tweets,
     _OTHER_TICKERS, _pick_meme,
 )
 from twitter_client import (
     fetch_list_tweets, fetch_mentions, post_reply, post_tweet, post_quote_tweet,
     fetch_tweet_chain, fetch_user_tweets, search_keyword_tweets, fetch_bot_followers,
-    QUOTE_TWEET_FORBIDDEN,
+    post_thread, QUOTE_TWEET_FORBIDDEN,
 )
 import memory as mem
 from scraper import scrape_all_data, fetch_token_data_sync, format_comparative_context
@@ -44,6 +45,10 @@ MAX_REPLIES_PER_ACCOUNT_HOUR = int(os.environ.get("MAX_REPLIES_PER_ACCOUNT_HOUR"
 MAX_SCORES_PER_DAY = int(os.environ.get("MAX_SCORES_PER_DAY", "20"))
 ENABLE_LAUNCH_DETECTION = os.environ.get("ENABLE_LAUNCH_DETECTION", "false").lower() == "true"
 MAX_LAUNCH_ALERTS_PER_HOUR = 2
+ENABLE_THREAD_MODE = os.environ.get("ENABLE_THREAD_MODE", "false").lower() == "true"
+MAX_THREADS_PER_DAY = 2
+_THREAD_HEAT_THRESHOLD = 85.0
+_THREAD_24H_THRESHOLD = 50.0
 
 _BOT_START_TIME = datetime.now(timezone.utc)
 
@@ -935,6 +940,16 @@ async def refresh_top_tickers(max_attempts: int = 3):
     logger.warning("refresh_top_tickers: all attempts failed — keeping previous cache")
 
 
+def _find_thread_mover(intel) -> dict | None:
+    """Return the top qualifying mover for a thread (50%+ 24h change or heat >85)."""
+    for token in intel.ranked_tokens:
+        chg_24h = token.get("price_change_24h") or 0.0
+        heat = token.get("heat_score", 0.0)
+        if chg_24h >= _THREAD_24H_THRESHOLD or heat > _THREAD_HEAT_THRESHOLD:
+            return token
+    return None
+
+
 async def post_original_tweet():
     global _latest_projects, _latest_dune_context, _latest_comparative_context, _latest_intelligence_context
     if is_paused():
@@ -985,6 +1000,34 @@ async def post_original_tweet():
         macro_ctx = intel_mod.get_macro_context(trending=trending) if random.random() < 0.35 else ""
         combined_ctx = "\n\n".join(filter(None, [intel_ctx, comparative_ctx, macro_ctx]))
 
+        # ── Thread Mode: big mover gets a 3-tweet thread ────────────────────────
+        if ENABLE_THREAD_MODE and intel:
+            mover = _find_thread_mover(intel)
+            if mover and count_threads_today() < MAX_THREADS_PER_DAY:
+                ticker = mover.get("name", "TOKEN")
+                logger.info(
+                    f"Thread Mode: ${ticker.upper()} qualifies "
+                    f"(24h={mover.get('price_change_24h', 0):+.1f}%, heat={mover.get('heat_score', 0):.0f}) "
+                    f"— generating 3-tweet thread"
+                )
+                thread_tweets = generate_thread_tweets(mover, intel_ctx)
+                posted_hour = datetime.now(timezone.utc).hour
+                if DRY_RUN:
+                    logger.info(f"[DRY RUN] Thread for ${ticker.upper()}:")
+                    for i, t in enumerate(thread_tweets, 1):
+                        logger.info(f"  [{i}/3] {t}")
+                    record_thread_post("dry_run", ticker, "big_mover", dry_run=True)
+                else:
+                    first_tweet_id = post_thread(thread_tweets)
+                    if first_tweet_id:
+                        record_thread_post(first_tweet_id, ticker, "big_mover", dry_run=False)
+                        record_tweet_performance(first_tweet_id, posted_hour)
+                        logger.info(f"Posted thread {first_tweet_id} for ${ticker.upper()}")
+                    else:
+                        logger.warning(f"Thread post failed for ${ticker.upper()}")
+                return
+
+        # ── Normal single-tweet path ─────────────────────────────────────────────
         memory_context = mem.get_memory_context()
         top_tickers = _get_top_tickers(10)
         tweet_text, img_path = generate_original_tweet(
@@ -999,9 +1042,11 @@ async def post_original_tweet():
             logger.info(f"[DRY RUN] Original tweet img={'yes' if img_path else 'no'}: {tweet_text}")
             record_original_tweet("dry_run", tweet_text, dry_run=True)
         else:
+            posted_hour = datetime.now(timezone.utc).hour
             tweet_id = post_tweet(tweet_text, media_path=img_path)
             if tweet_id:
                 record_original_tweet(tweet_id, tweet_text, dry_run=False)
+                record_tweet_performance(tweet_id, posted_hour)
                 logger.info(f"Posted original tweet {tweet_id} img={'yes' if img_path else 'no'}: {tweet_text[:60]}...")
             else:
                 logger.warning("Failed to post original tweet")

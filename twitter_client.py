@@ -242,6 +242,24 @@ def post_tweet(text: str, media_path: str | None = None) -> str | None:
         return None
 
 
+def post_thread(tweets: list[str]) -> str | None:
+    """Post a list of tweet texts as a thread. Returns the first tweet's ID, or None on failure."""
+    if not tweets:
+        return None
+    first_id = post_tweet(tweets[0])
+    if not first_id:
+        logger.warning("post_thread: failed to post opening tweet — aborting thread")
+        return None
+    prev_id = first_id
+    for i, tweet_text in enumerate(tweets[1:], start=2):
+        reply_id = post_reply(tweet_text, in_reply_to_tweet_id=prev_id)
+        if not reply_id:
+            logger.warning(f"post_thread: failed to post tweet {i} of thread — partial thread posted")
+            break
+        prev_id = reply_id
+    return first_id
+
+
 QUOTE_TWEET_FORBIDDEN = "QUOTE_TWEET_FORBIDDEN"
 
 

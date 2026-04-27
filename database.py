@@ -179,6 +179,22 @@ def init_db():
                 dry_run INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS thread_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                first_tweet_id TEXT,
+                ticker TEXT,
+                thread_type TEXT,
+                dry_run INTEGER DEFAULT 0,
+                posted_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS tweet_performance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tweet_id TEXT UNIQUE,
+                posted_hour_utc INTEGER,
+                posted_at TEXT DEFAULT (datetime('now'))
+            );
         """)
 
 
@@ -675,6 +691,32 @@ def count_launch_alerts_last_hour() -> int:
                AND tweeted_at >= datetime('now', '-1 hour')"""
         ).fetchone()
         return row[0] if row else 0
+
+
+def record_thread_post(first_tweet_id: str, ticker: str, thread_type: str, dry_run: bool):
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO thread_posts (first_tweet_id, ticker, thread_type, dry_run) VALUES (?, ?, ?, ?)",
+            (first_tweet_id, ticker, thread_type, int(dry_run))
+        )
+
+
+def count_threads_today() -> int:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM thread_posts WHERE posted_at LIKE ?",
+            (f"{today}%",)
+        ).fetchone()
+        return row[0] if row else 0
+
+
+def record_tweet_performance(tweet_id: str, posted_hour_utc: int):
+    with db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO tweet_performance (tweet_id, posted_hour_utc) VALUES (?, ?)",
+            (tweet_id, posted_hour_utc)
+        )
 
 
 def get_ecosystem_context_age_hours() -> float | None:

@@ -3,7 +3,7 @@ import hmac
 import logging
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse
@@ -11,6 +11,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import database
 import bot
+import intelligence as intel_mod
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,10 +22,23 @@ logger = logging.getLogger("glazeprintr")
 DRY_RUN = os.environ.get("DRY_RUN", "true").lower() == "true"
 DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
 ENABLE_LAUNCH_DETECTION = os.environ.get("ENABLE_LAUNCH_DETECTION", "false").lower() == "true"
+ENABLE_TIME_OPTIMIZATION = os.environ.get("ENABLE_TIME_OPTIMIZATION", "false").lower() == "true"
 
 scheduler = AsyncIOScheduler()
 
 _lock_tweet = asyncio.Lock()
+
+
+async def _run_original_tweet_with_reschedule():
+    """Wrapper that posts an original tweet then reschedules itself based on optimal interval."""
+    await bot.post_original_tweet()
+    next_interval = intel_mod.get_optimal_interval()
+    next_run = datetime.now(timezone.utc) + timedelta(minutes=next_interval)
+    try:
+        scheduler.reschedule_job("original_tweeter", trigger="date", run_date=next_run)
+        logger.info(f"Time optimization: next original tweet in {next_interval} min ({next_run.strftime('%H:%M')} UTC)")
+    except Exception as e:
+        logger.error(f"Failed to reschedule original tweeter: {e}")
 _lock_mentions = asyncio.Lock()
 _lock_follower_poll = asyncio.Lock()
 _lock_qt_glazer = asyncio.Lock()
@@ -61,8 +75,13 @@ async def lifespan(app: FastAPI):
     # Follower scan disabled — Twitter blocks unsolicited replies, wastes API credits.
     # scheduler.add_job(bot.poll_follower_tweets, "interval", minutes=5, id="follower_poller", replace_existing=True,
     #                   max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
-    scheduler.add_job(bot.post_original_tweet, "interval", minutes=60, id="original_tweeter", replace_existing=True,
-                      max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    if ENABLE_TIME_OPTIMIZATION:
+        scheduler.add_job(_run_original_tweet_with_reschedule, "date", run_date=_now, id="original_tweeter",
+                          replace_existing=True, max_instances=1, misfire_grace_time=60)
+    else:
+        scheduler.add_job(bot.post_original_tweet, "interval", minutes=60, id="original_tweeter",
+                          replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=60,
+                          next_run_time=_now)
     scheduler.add_job(bot.refresh_ecosystem_context, "interval", hours=6, id="ecosystem_refresher", replace_existing=True,
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True,
@@ -74,7 +93,13 @@ async def lifespan(app: FastAPI):
                           max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.start()
     launch_detection_status = "launch detection (10 min)" if ENABLE_LAUNCH_DETECTION else "launch detection DISABLED"
-    logger.info(f"Schedulers started: mentions (5 min), QT glazer (30 min), original tweets (60 min), intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h), {launch_detection_status} — list poller DISABLED, follower scan DISABLED")
+    time_opt_status = "time optimization ON (dynamic interval 45/60/90 min)" if ENABLE_TIME_OPTIMIZATION else "fixed 60 min interval"
+    thread_mode_status = "thread mode ON" if bot.ENABLE_THREAD_MODE else "thread mode DISABLED"
+    logger.info(
+        f"Schedulers started: mentions (5 min), QT glazer (30 min), original tweets ({time_opt_status}), "
+        f"intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h), "
+        f"{launch_detection_status}, {thread_mode_status} — list poller DISABLED, follower scan DISABLED"
+    )
 
     yield
 
