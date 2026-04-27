@@ -31,6 +31,7 @@ ENABLE_BURN_TRACKING = os.environ.get("ENABLE_BURN_TRACKING", "false").lower() =
 ENABLE_REWARDS_DATA = os.environ.get("ENABLE_REWARDS_DATA", "false").lower() == "true"
 ENABLE_LAUNCH_GUIDE = os.environ.get("ENABLE_LAUNCH_GUIDE", "false").lower() == "true"
 ENABLE_WALLET_PROFILING = os.environ.get("ENABLE_WALLET_PROFILING", "false").lower() == "true"
+ENABLE_WALLET_GLAZING = os.environ.get("ENABLE_WALLET_GLAZING", "false").lower() == "true"
 
 scheduler = AsyncIOScheduler()
 
@@ -123,6 +124,9 @@ async def lifespan(app: FastAPI):
             await loop.run_in_executor(None, lambda: _refresh_wallets(projects))
         scheduler.add_job(_wallet_refresh_job, "interval", hours=6, id="wallet_profiler", replace_existing=True,
                           max_instances=1, coalesce=True, misfire_grace_time=300, next_run_time=_now)
+    if ENABLE_WALLET_GLAZING:
+        scheduler.add_job(bot.scan_and_stake, "interval", minutes=15, id="wallet_glazer", replace_existing=True,
+                          max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.start()
     launch_detection_status = "launch detection (10 min)" if ENABLE_LAUNCH_DETECTION else "launch detection DISABLED"
     whale_status = "whale tracking (15 min)" if ENABLE_WHALE_TRACKING else "whale tracking DISABLED"
@@ -135,12 +139,13 @@ async def lifespan(app: FastAPI):
     correlation_status = "correlation tweets (15 min)" if ENABLE_CORRELATION_TWEETS else "correlation tweets DISABLED"
     staking_status = "staking tweets (12h)" if ENABLE_STAKING_TWEETS else "staking tweets DISABLED"
     wallet_status = "wallet profiling (6h)" if ENABLE_WALLET_PROFILING else "wallet profiling DISABLED"
+    glazing_status = "wallet glazing (15 min)" if ENABLE_WALLET_GLAZING else "wallet glazing DISABLED"
     logger.info(
         f"Schedulers started: mentions (5 min), QT glazer (30 min), original tweets ({time_opt_status}), "
         f"intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h), "
         f"{launch_detection_status}, {whale_status}, {competitor_status}, {thread_mode_status}, "
         f"{correlation_status}, {staking_status}, "
-        f"{burn_status}, {rewards_status}, {launch_guide_status}, {wallet_status} — "
+        f"{burn_status}, {rewards_status}, {launch_guide_status}, {wallet_status}, {glazing_status} — "
         f"list poller DISABLED, follower scan DISABLED"
     )
 

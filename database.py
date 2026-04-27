@@ -304,6 +304,32 @@ def init_db():
         """)
         conn.commit()
 
+        # Feature: Wallet glazing — bot's own deposit wallet tracking
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS wallet_holdings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT,
+                mint_address TEXT,
+                balance REAL DEFAULT 0,
+                usd_value REAL DEFAULT 0,
+                tier TEXT,
+                last_scanned TEXT,
+                last_glazed_at TEXT,
+                UNIQUE(ticker)
+            );
+
+            CREATE TABLE IF NOT EXISTS staking_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT,
+                amount REAL,
+                lock_days INTEGER,
+                tx_hash TEXT,
+                status TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        conn.commit()
+
 
 # --- replied_tweets ---
 
@@ -1187,3 +1213,83 @@ def get_wallet_profiles(label: str = None) -> list[dict]:
                 d["tokens_staked"] = []
             results.append(d)
         return results
+
+
+# --- wallet_holdings ---
+
+def upsert_wallet_holding(ticker: str, mint_address: str, balance: float,
+                          usd_value: float, tier: str | None, last_scanned: str):
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO wallet_holdings
+               (ticker, mint_address, balance, usd_value, tier, last_scanned)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(ticker) DO UPDATE SET
+                 mint_address=excluded.mint_address,
+                 balance=excluded.balance,
+                 usd_value=excluded.usd_value,
+                 tier=excluded.tier,
+                 last_scanned=excluded.last_scanned""",
+            (ticker.lower(), mint_address, balance, usd_value, tier, last_scanned)
+        )
+
+
+def get_wallet_holdings() -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT ticker, mint_address, balance, usd_value, tier,
+                      last_scanned, last_glazed_at
+               FROM wallet_holdings"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_glaze_queue() -> list[dict]:
+    """Return wallet holdings with a recognized tier, ordered by priority (legendary first)."""
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT ticker, mint_address, balance, usd_value, tier,
+                      last_scanned, last_glazed_at
+               FROM wallet_holdings
+               WHERE tier IS NOT NULL
+               ORDER BY CASE tier
+                 WHEN 'legendary' THEN 1
+                 WHEN 'gold'      THEN 2
+                 WHEN 'silver'    THEN 3
+                 WHEN 'bronze'    THEN 4
+                 ELSE 5
+               END"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_last_glazed(ticker: str):
+    with db() as conn:
+        conn.execute(
+            "UPDATE wallet_holdings SET last_glazed_at = datetime('now') WHERE ticker = ?",
+            (ticker.lower(),)
+        )
+
+
+# --- staking_transactions ---
+
+def record_staking_tx(ticker: str, amount: float, lock_days: int,
+                      tx_hash: str, status: str):
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO staking_transactions (ticker, amount, lock_days, tx_hash, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            (ticker.lower(), amount, lock_days, tx_hash or "", status)
+        )
+
+
+def get_confirmed_staked_amounts() -> dict[str, float]:
+    """Return {ticker: total_staked_tokens} from confirmed staking transactions in DB."""
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT ticker, SUM(amount) as total
+               FROM staking_transactions
+               WHERE status = 'confirmed'
+               GROUP BY ticker"""
+        ).fetchall()
+        return {r["ticker"]: r["total"] for r in rows}

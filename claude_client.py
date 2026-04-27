@@ -848,7 +848,9 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
                             top_tickers: list[str] = None,
                             ecosystem_comparative: str = "",
                             dune_context: str = "",
-                            historical_context: str = "") -> tuple[str, str | None]:
+                            historical_context: str = "",
+                            forced_ticker: str | None = None,
+                            paid_glaze: bool = False) -> tuple[str, str | None]:
     system = SYSTEM_PROMPT_BASE + "\n\n" + ORIGINAL_TWEET_PROMPT
 
     ecosystem_ctx = get_ecosystem_context_for_prompt()
@@ -965,7 +967,31 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
 
     pattern_context = ""
 
-    if roll < 0.20 and "fatchoi" not in recent_tickers:
+    if forced_ticker:
+        # Wallet glaze queue override: a token with community backing is due for a glaze.
+        # Uses full intelligence context (market data, setups, history) — only the subject is forced.
+        ticker = forced_ticker.lower()
+        meme_angles = (
+            "grindset, price shock, holder psychology, community callout, "
+            "philosophical conviction, absurdist humor, or pure price action"
+        )
+        topic_instruction = (
+            f"Spotlight ${ticker.upper()} with maximum conviction — pick ONE angle: {meme_angles}. "
+            f"Lead with its best live stat if available. Focus entirely on ${ticker.upper()}."
+        )
+        if paid_glaze:
+            topic_instruction += (
+                " This token has community backing — holders are actively depositing to support it. "
+                "Write with extra conviction and detail."
+            )
+        topics = [(f"{ticker}_paid_glaze", topic_instruction)]
+        ticker_note = f"SINGLE TICKER RULE: this tweet is about ${ticker.upper()} only — no other cashtags.\n\n"
+        chosen_ticker = ticker
+        ticker_data = next(
+            (p for p in (market_data or []) if p.get("name", "").lower() == ticker), {}
+        )
+        pattern_context = get_evolution_context(ticker, ticker_data)
+    elif roll < 0.20 and "fatchoi" not in recent_tickers:
         topics = _FATCHOI_TOPICS
         ticker_note = "SINGLE TICKER RULE: this tweet is about $FATCHOI only — no other cashtags.\n\n"
         chosen_ticker = "fatchoi"

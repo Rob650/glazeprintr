@@ -27,8 +27,10 @@ from database import (
     get_last_staking_tweet_time, set_last_staking_tweet_time,
     get_untweeted_burns, mark_burn_tweeted, count_burn_tweets_last_hour,
     recently_tweeted_about_token,
+    get_glaze_queue, update_last_glazed,
 )
 import launch_detector
+import wallet_scanner
 from claude_client import (
     generate_reply, select_mode, generate_original_tweet, score_glaze,
     classify_tweet_intent, generate_quote_tweet, generate_thread_tweets,
@@ -69,6 +71,7 @@ ENABLE_THREAD_MODE = os.environ.get("ENABLE_THREAD_MODE", "false").lower() == "t
 ENABLE_CORRELATION_TWEETS = os.environ.get("ENABLE_CORRELATION_TWEETS", "false").lower() == "true"
 ENABLE_STAKING_TWEETS = os.environ.get("ENABLE_STAKING_TWEETS", "false").lower() == "true"
 ENABLE_WALLET_PROFILING = os.environ.get("ENABLE_WALLET_PROFILING", "false").lower() == "true"
+ENABLE_WALLET_GLAZING = os.environ.get("ENABLE_WALLET_GLAZING", "false").lower() == "true"
 MAX_THREADS_PER_DAY = 2
 _THREAD_HEAT_THRESHOLD = 85.0
 _THREAD_24H_THRESHOLD = 50.0
@@ -750,6 +753,26 @@ def poll_qt_glazer_list():
 
     logger.info(f"QT Glazer: {len(tweets)} new tweet(s) after since_id filter")
 
+    # Legendary wallet tokens get extra QT search weight: fetch keyword tweets for them
+    if ENABLE_WALLET_GLAZING:
+        try:
+            legendary = [h["ticker"] for h in get_glaze_queue() if h.get("tier") == "legendary"]
+            existing_ids = {t["id"] for t in tweets}
+            for ticker in legendary[:2]:  # cap at 2 to avoid rate limit blowout
+                extra = search_keyword_tweets(
+                    f"${ticker.upper()} Printr",
+                    since_id=_qt_glazer_since_id,
+                )
+                for t in (extra or []):
+                    if t["id"] not in existing_ids:
+                        t["_legendary_weight"] = True
+                        tweets.append(t)
+                        existing_ids.add(t["id"])
+                if extra:
+                    logger.info(f"Legendary ${ticker.upper()}: +{len(extra)} keyword tweets to QT pool")
+        except Exception as e:
+            logger.warning(f"Legendary wallet QT boost failed: {e}")
+
     # Pass 1: filter candidates (no claiming yet)
     candidates = []
     for tweet in tweets:
@@ -791,6 +814,10 @@ def poll_qt_glazer_list():
             result = score_glaze(tweet_text, author_handle)
             if result is not None:
                 score, _tier, _card = result
+                # Legendary wallet tokens get a score bonus for extra QT weight
+                if tweet.get("_legendary_weight"):
+                    score = min(100, score + 20)
+                    logger.info(f"QT legendary weight applied to {tweet_id}: {score}/100")
                 scored.append((score, tweet))
                 logger.info(f"QT scored @{author_handle} ({tweet_id}): {score}/100")
             else:
@@ -1163,6 +1190,16 @@ def _find_thread_mover(intel) -> dict | None:
     return None
 
 
+async def scan_and_stake():
+    """Scan bot wallet, compute glaze tiers (staked + unstaked), auto-stake. Runs every 15 min."""
+    if not ENABLE_WALLET_GLAZING:
+        return
+    try:
+        await wallet_scanner.scan_and_stake()
+    except Exception as e:
+        logger.error(f"scan_and_stake error: {e}")
+
+
 async def post_original_tweet():
     global _latest_projects, _latest_dune_context, _latest_comparative_context, _latest_intelligence_context
     if is_paused():
@@ -1291,6 +1328,24 @@ async def post_original_tweet():
                 return
 
         # ── Normal single-tweet path ─────────────────────────────────────────────
+
+        # Check wallet glaze queue: if a paid token is due, prioritize it as subject.
+        # Tweet still uses full intelligence context — only the ticker is forced.
+        paid_glaze_ticker: str | None = None
+        if ENABLE_WALLET_GLAZING:
+            try:
+                for holding in get_glaze_queue():
+                    ticker_candidate = holding["ticker"]
+                    if wallet_scanner.should_glaze_now(ticker_candidate):
+                        paid_glaze_ticker = ticker_candidate
+                        logger.info(
+                            f"Wallet glaze queue: prioritizing ${ticker_candidate.upper()} "
+                            f"(tier={holding.get('tier')}, ${holding.get('usd_value', 0):.2f})"
+                        )
+                        break
+            except Exception as e:
+                logger.warning(f"Glaze queue check failed: {e}")
+
         memory_context = mem.get_memory_context()
         top_tickers = _get_top_tickers(10)
         tweet_text, img_path = generate_original_tweet(
@@ -1300,11 +1355,15 @@ async def post_original_tweet():
             ecosystem_comparative=combined_ctx,
             dune_context=dune_ctx,
             historical_context=historical_ctx,
+            forced_ticker=paid_glaze_ticker,
+            paid_glaze=paid_glaze_ticker is not None,
         )
 
         if DRY_RUN:
             logger.info(f"[DRY RUN] Original tweet img={'yes' if img_path else 'no'}: {tweet_text}")
             record_original_tweet("dry_run", tweet_text, dry_run=True)
+            if paid_glaze_ticker:
+                update_last_glazed(paid_glaze_ticker)
         else:
             posted_hour = datetime.now(timezone.utc).hour
             tweet_id = post_tweet(tweet_text, media_path=img_path)
@@ -1312,6 +1371,8 @@ async def post_original_tweet():
                 record_original_tweet(tweet_id, tweet_text, dry_run=False)
                 record_tweet_performance(tweet_id, posted_hour)
                 logger.info(f"Posted original tweet {tweet_id} img={'yes' if img_path else 'no'}: {tweet_text[:60]}...")
+                if paid_glaze_ticker:
+                    update_last_glazed(paid_glaze_ticker)
             else:
                 logger.warning("Failed to post original tweet")
     except Exception as e:
