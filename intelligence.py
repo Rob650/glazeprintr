@@ -640,3 +640,354 @@ def get_keyword_weights() -> dict[str, list[str]]:
         "qt_search":      intel.get_qt_search_tickers(8),
         "reply_priority": [t.get("name", "").lower() for t in intel.ranked_tokens[:5]],
     }
+
+
+# ── Macro Pressure Rules Engine ───────────────────────────────────────────────
+
+MACRO_RULES = [
+    {
+        "name": "sol_bullish_week",
+        "trigger": "ecosystem volume historically spikes 48h after SOL weekly green",
+        "implication": "volume expansion incoming",
+        "check": lambda projects, eco_hist: _check_sol_bullish_week(projects),
+    },
+    {
+        "name": "staking_increasing",
+        "trigger": "ecosystem staking % up 5+ points in 7 days",
+        "implication": "supply compression — less sell pressure",
+        "check": lambda projects, eco_hist: _check_staking_increasing(eco_hist),
+    },
+    {
+        "name": "volume_without_price",
+        "trigger": "volume 3x avg but price flat for 24h+",
+        "implication": "accumulation phase — breakout setup",
+        "check": lambda projects, eco_hist: _check_volume_without_price(projects),
+    },
+    {
+        "name": "mc_recovery",
+        "trigger": "ecosystem MC recovering from -20% drawdown",
+        "implication": "historically recovers to previous high within 2 weeks",
+        "check": lambda projects, eco_hist: _check_mc_recovery(eco_hist),
+    },
+    {
+        "name": "new_launches_spike",
+        "trigger": "3+ new tokens launched this week",
+        "implication": "ecosystem growth phase — rising tide lifts all boats",
+        "check": lambda projects, eco_hist: _check_new_launches_spike(),
+    },
+]
+
+
+def _check_sol_bullish_week(projects: list[dict]) -> bool:
+    """Proxy: ecosystem 7-day momentum is positive (SOL and ecosystem trend together)."""
+    intel = _cached_intelligence
+    if not intel:
+        return False
+    trending = intel.health.get("ecosystem_trending", "flat")
+    momentum = intel.health.get("ecosystem_momentum_score", 50)
+    return trending == "up" and momentum >= 60
+
+
+def _check_staking_increasing(eco_hist: list[dict]) -> bool:
+    """Check if staking % increased 5+ points over 7 days using snapshot history."""
+    try:
+        from database import db
+        with db() as conn:
+            row_old = conn.execute(
+                """SELECT AVG(staking_pct) as avg_staking FROM token_snapshots
+                   WHERE snapshot_at >= datetime('now', '-7 days')
+                   AND snapshot_at < datetime('now', '-6 days')
+                   AND staking_pct IS NOT NULL"""
+            ).fetchone()
+            row_new = conn.execute(
+                """SELECT AVG(staking_pct) as avg_staking FROM token_snapshots
+                   WHERE snapshot_at >= datetime('now', '-1 hour')
+                   AND staking_pct IS NOT NULL"""
+            ).fetchone()
+        old_avg = row_old["avg_staking"] if row_old and row_old["avg_staking"] is not None else None
+        new_avg = row_new["avg_staking"] if row_new and row_new["avg_staking"] is not None else None
+        if old_avg is not None and new_avg is not None:
+            return (new_avg - old_avg) >= 5.0
+    except Exception:
+        pass
+    return False
+
+
+def _check_volume_without_price(projects: list[dict]) -> bool:
+    """True if 3+ tokens show volume surge (>2x avg) with flat price (<5% 24h)."""
+    if not projects:
+        return False
+    count = 0
+    for p in projects:
+        vol_24h = p.get("volume") or 0
+        vol_1h = p.get("volume_1h") or 0
+        chg_24h = p.get("price_change_24h")
+        if vol_24h > 0 and vol_1h > 0 and chg_24h is not None:
+            hourly_avg = vol_24h / 24.0
+            if hourly_avg > 0 and vol_1h >= hourly_avg * 2 and abs(chg_24h) < 5.0:
+                count += 1
+    return count >= 3
+
+
+def _check_mc_recovery(eco_hist: list[dict]) -> bool:
+    """True if ecosystem MC dropped ≥20% from 7d high and is now recovering."""
+    if not eco_hist or len(eco_hist) < 2:
+        return False
+    mcs = [h.get("total_mc") or 0 for h in eco_hist if h.get("total_mc")]
+    if len(mcs) < 2:
+        return False
+    peak_mc = max(mcs[:-1]) if len(mcs) > 1 else mcs[0]
+    trough_mc = min(mcs)
+    current_mc = mcs[-1]
+    if peak_mc > 0 and trough_mc > 0:
+        drawdown = (trough_mc - peak_mc) / peak_mc * 100
+        recovery = (current_mc - trough_mc) / trough_mc * 100 if trough_mc > 0 else 0
+        return drawdown <= -20 and recovery >= 5
+    return False
+
+
+def _check_new_launches_spike() -> bool:
+    """True if 3+ new token launches were detected in the last 7 days."""
+    try:
+        from database import db
+        with db() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*) as cnt FROM detected_launches
+                   WHERE detected_at >= datetime('now', '-7 days')"""
+            ).fetchone()
+            return (row["cnt"] if row else 0) >= 3
+    except Exception:
+        return False
+
+
+def evaluate_macro_rules(projects: list[dict], eco_history: list[dict] | None = None) -> list[dict]:
+    """
+    Check each macro rule's condition against live data.
+    Returns list of triggered rules with their trigger/implication text.
+    """
+    if eco_history is None:
+        eco_history = []
+    triggered: list[dict] = []
+    for rule in MACRO_RULES:
+        try:
+            if rule["check"](projects, eco_history):
+                triggered.append({
+                    "name": rule["name"],
+                    "trigger": rule["trigger"],
+                    "implication": rule["implication"],
+                })
+        except Exception as exc:
+            logger.debug(f"macro rule {rule['name']} check failed: {exc}")
+    return triggered
+
+
+def format_macro_rules(triggered: list[dict]) -> str:
+    """Format triggered macro rules for Claude injection."""
+    if not triggered:
+        return ""
+    lines = ["ACTIVE MACRO SIGNALS (weave relevant ones into your take):"]
+    for r in triggered:
+        lines.append(f"  [{r['name']}] {r['trigger']} → {r['implication']}")
+    return "\n".join(lines)
+
+
+# ── Setup Recognition ─────────────────────────────────────────────────────────
+
+def detect_setups(ticker: str, current: dict, history: list[dict]) -> list[str]:
+    """
+    Detect active trading setups for a single token.
+
+    Returns list of setup names that are currently active.
+    history: list of snapshot dicts from get_token_history()
+    """
+    setups: list[str] = []
+
+    vol_24h = current.get("volume") or 0
+    vol_1h  = current.get("volume_1h") or 0
+    chg_24h = current.get("price_change_24h")
+    chg_1h  = current.get("price_change_1h")
+    staking = current.get("staking_pct") or 0
+    mc      = current.get("market_cap") or 0
+    buys_1h = current.get("buys_1h") or 0
+    sells_1h = current.get("sells_1h") or 0
+
+    intel = _cached_intelligence
+    avg_chg_24h = 0.0
+    if intel and intel.projects:
+        chg_vals = [p.get("price_change_24h") for p in intel.projects if p.get("price_change_24h") is not None]
+        if chg_vals:
+            avg_chg_24h = sum(chg_vals) / len(chg_vals)
+
+    # Accumulation: volume spike + flat price
+    if vol_24h > 0 and vol_1h > 0 and chg_24h is not None:
+        hourly_avg = vol_24h / 24.0
+        if hourly_avg > 0 and vol_1h >= hourly_avg * 3 and -5.0 <= chg_24h <= 5.0:
+            setups.append("accumulation")
+
+    # Compression: staking up 5+ points in 7d + volume declining
+    if history and len(history) >= 2 and staking > 0:
+        old_staking = history[0].get("staking_pct") or 0
+        staking_increase = staking - old_staking
+        if staking_increase >= 5:
+            # Check if volume is declining (recent 1h vol < 7d hourly average)
+            vol_samples = [h.get("volume_1h") for h in history if h.get("volume_1h") is not None]
+            if vol_samples:
+                avg_hist_vol = sum(vol_samples) / len(vol_samples)
+                if avg_hist_vol > 0 and vol_1h < avg_hist_vol * 0.8:
+                    setups.append("compression")
+
+    # Laggard catch-up: token underperforming ecosystem by 15+ points AND MC > $100K
+    if chg_24h is not None and mc >= 100_000:
+        if avg_chg_24h - chg_24h >= 15:
+            setups.append("laggard_catch_up")
+
+    # Breakout confirmation: strong 1h move + volume surge + buy dominance
+    if chg_1h is not None and chg_1h >= 15 and vol_24h > 0 and vol_1h > 0:
+        hourly_avg = vol_24h / 24.0
+        total_1h = buys_1h + sells_1h
+        buy_ratio = buys_1h / total_1h if total_1h > 0 else 0
+        if hourly_avg > 0 and vol_1h >= hourly_avg * 2 and buy_ratio >= 0.70:
+            setups.append("breakout_confirmation")
+
+    # Exhaustion top: big 24h move + recent sell dominance
+    if chg_24h is not None and chg_24h >= 50 and history and len(history) >= 3:
+        recent_snaps = history[-3:]
+        recent_sell_dom = sum(
+            1 for s in recent_snaps
+            if (s.get("sells_1h") or 0) > (s.get("buys_1h") or 0)
+        )
+        if recent_sell_dom >= 2:
+            setups.append("exhaustion_top")
+
+    return setups
+
+
+def get_all_active_setups(projects: list[dict]) -> dict[str, list[str]]:
+    """
+    Scan all tokens and return dict of ticker → [active setup names].
+    Only includes tokens with at least one active setup.
+    """
+    result: dict[str, list[str]] = {}
+    for p in projects:
+        ticker = (p.get("name") or "").lower()
+        if not ticker:
+            continue
+        try:
+            from database import get_token_snapshots
+            history = get_token_snapshots(ticker, hours=168)
+            active = detect_setups(ticker, p, history)
+            if active:
+                result[ticker] = active
+        except Exception as exc:
+            logger.debug(f"setup detection failed for {ticker}: {exc}")
+    return result
+
+
+def format_active_setups(setups: dict[str, list[str]]) -> str:
+    """Format active setups dict into a Claude-injectable block."""
+    if not setups:
+        return ""
+    lines = ["ACTIVE SETUPS (reference these in your analysis when relevant):"]
+    for ticker, setup_list in setups.items():
+        labels = ", ".join(s.replace("_", " ") for s in setup_list)
+        lines.append(f"  ${ticker.upper()}: {labels}")
+    return "\n".join(lines)
+
+
+# ── Ecosystem Comparison Engine ───────────────────────────────────────────────
+
+def get_ecosystem_vs_token_divergence(projects: list[dict]) -> list[dict]:
+    """
+    Find tokens diverging from ecosystem trend.
+
+    Returns list of divergence dicts, each with:
+      ticker, type ("catch_up" | "momentum_leader"), ecosystem_24h, token_24h, gap
+    """
+    intel = _cached_intelligence
+    if not intel or not projects:
+        return []
+
+    trending = intel.health.get("ecosystem_trending", "flat")
+    mc_movers = [p for p in projects if p.get("price_change_24h") is not None and (p.get("market_cap") or 0) > 0]
+    total_weight = sum(p["market_cap"] for p in mc_movers)
+    if total_weight == 0:
+        return []
+
+    ecosystem_24h = sum(
+        p["price_change_24h"] * p["market_cap"] / total_weight for p in mc_movers
+    )
+
+    divergences: list[dict] = []
+    for p in projects:
+        chg = p.get("price_change_24h")
+        mc = p.get("market_cap") or 0
+        if chg is None:
+            continue
+
+        gap = ecosystem_24h - chg
+
+        # Catch-up candidate: ecosystem up but token flat/down (gap > 10pp)
+        if trending in ("up", "flat") and gap >= 10 and mc >= 50_000:
+            divergences.append({
+                "ticker": (p.get("name") or "").upper(),
+                "type": "catch_up",
+                "ecosystem_24h": round(ecosystem_24h, 1),
+                "token_24h": round(chg, 1),
+                "gap": round(gap, 1),
+            })
+
+        # Momentum leader: token outperforming ecosystem by 15+ pp
+        elif chg - ecosystem_24h >= 15 and mc >= 50_000:
+            divergences.append({
+                "ticker": (p.get("name") or "").upper(),
+                "type": "momentum_leader",
+                "ecosystem_24h": round(ecosystem_24h, 1),
+                "token_24h": round(chg, 1),
+                "gap": round(chg - ecosystem_24h, 1),
+            })
+
+    divergences.sort(key=lambda d: d["gap"], reverse=True)
+    return divergences
+
+
+def format_divergence_analysis(divergences: list[dict], eco_history: list[dict] | None = None) -> str:
+    """Format divergence analysis into a Claude-injectable block."""
+    if not divergences:
+        return ""
+
+    lines = ["ECOSYSTEM DIVERGENCE SIGNALS:"]
+    for d in divergences[:5]:
+        ticker = d["ticker"]
+        eco = d["ecosystem_24h"]
+        tok = d["token_24h"]
+        gap = d["gap"]
+
+        if d["type"] == "catch_up":
+            lines.append(
+                f"  ${ticker}: potential catch-up — ecosystem {eco:+.1f}% but token only {tok:+.1f}% "
+                f"({gap:.0f}pp gap)"
+            )
+        elif d["type"] == "momentum_leader":
+            lines.append(
+                f"  ${ticker}: momentum leader — outperforming ecosystem by {gap:.0f}pp "
+                f"({tok:+.1f}% vs {eco:+.1f}% ecosystem)"
+            )
+
+    # Historical MC level comparison (if history available)
+    if eco_history and len(eco_history) >= 2:
+        intel = _cached_intelligence
+        if intel:
+            current_mc = intel.health.get("total_mc", 0)
+            if current_mc > 0:
+                for snap in eco_history:
+                    snap_mc = snap.get("total_mc") or 0
+                    if snap_mc > 0 and abs(snap_mc - current_mc) / current_mc < 0.05:
+                        hour = snap.get("hour", "")
+                        if hour:
+                            lines.append(
+                                f"  Ecosystem MC (${current_mc/1e6:.1f}M) near level last seen {hour[:10]} — "
+                                f"watch for historical pattern replay"
+                            )
+                            break
+
+    return "\n".join(lines)

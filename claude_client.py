@@ -847,7 +847,8 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
 def generate_original_tweet(market_data: list[dict] = None, memory_context: str = "",
                             top_tickers: list[str] = None,
                             ecosystem_comparative: str = "",
-                            dune_context: str = "") -> tuple[str, str | None]:
+                            dune_context: str = "",
+                            historical_context: str = "") -> tuple[str, str | None]:
     system = SYSTEM_PROMPT_BASE + "\n\n" + ORIGINAL_TWEET_PROMPT
 
     ecosystem_ctx = get_ecosystem_context_for_prompt()
@@ -859,6 +860,8 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
         user_message += dune_context + "\n\n"
     if ecosystem_comparative:
         user_message += ecosystem_comparative + "\n\n"
+    if historical_context:
+        user_message += f"HISTORICAL CONTEXT (use these patterns to add depth and precision — reference specific setups and signals when relevant):\n{historical_context}\n\n"
     if memory_context:
         user_message += f"MEMORY CONTEXT:\n{memory_context}\n\n"
 

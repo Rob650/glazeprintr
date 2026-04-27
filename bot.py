@@ -44,6 +44,8 @@ from twitter_client import (
 import memory as mem
 from scraper import scrape_all_data, fetch_token_data_sync, format_comparative_context
 import intelligence as intel_mod
+import history_tracker
+import wallet_profiler
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,7 @@ _BURN_MIN_USD = 100.0
 ENABLE_THREAD_MODE = os.environ.get("ENABLE_THREAD_MODE", "false").lower() == "true"
 ENABLE_CORRELATION_TWEETS = os.environ.get("ENABLE_CORRELATION_TWEETS", "false").lower() == "true"
 ENABLE_STAKING_TWEETS = os.environ.get("ENABLE_STAKING_TWEETS", "false").lower() == "true"
+ENABLE_WALLET_PROFILING = os.environ.get("ENABLE_WALLET_PROFILING", "false").lower() == "true"
 MAX_THREADS_PER_DAY = 2
 _THREAD_HEAT_THRESHOLD = 85.0
 _THREAD_24H_THRESHOLD = 50.0
@@ -1216,6 +1219,46 @@ async def post_original_tweet():
 
         combined_ctx = "\n\n".join(filter(None, [intel_ctx, comparative_ctx, macro_ctx, competitor_ctx]))
 
+        # ── Historical intelligence layer ────────────────────────────────────────
+        historical_ctx = ""
+        try:
+            loop = asyncio.get_running_loop()
+
+            # Active setups
+            active_setups = await loop.run_in_executor(
+                None, lambda: intel_mod.get_all_active_setups(projects)
+            )
+            setups_str = intel_mod.format_active_setups(active_setups)
+
+            # Macro rules
+            eco_history = await loop.run_in_executor(
+                None, lambda: history_tracker.get_ecosystem_history(hours=168)
+            )
+            triggered_rules = intel_mod.evaluate_macro_rules(projects, eco_history)
+            rules_str = intel_mod.format_macro_rules(triggered_rules)
+
+            # 7-day historical comparisons
+            hist_comparisons = await loop.run_in_executor(
+                None, lambda: history_tracker.format_historical_comparisons(projects)
+            )
+
+            # Ecosystem divergence
+            divergences = intel_mod.get_ecosystem_vs_token_divergence(projects)
+            divergence_str = intel_mod.format_divergence_analysis(divergences, eco_history)
+
+            # Smart wallet summary
+            wallet_str = ""
+            if ENABLE_WALLET_PROFILING:
+                wallet_summary = await loop.run_in_executor(
+                    None, wallet_profiler.get_smart_wallet_summary
+                )
+                wallet_str = wallet_summary.get("formatted", "")
+
+            historical_parts = filter(None, [setups_str, rules_str, hist_comparisons, divergence_str, wallet_str])
+            historical_ctx = "\n\n".join(historical_parts)
+        except Exception as e:
+            logger.warning(f"historical context build error: {e}")
+
         # ── Thread Mode: big mover gets a 3-tweet thread ────────────────────────
         if ENABLE_THREAD_MODE and intel:
             mover = _find_thread_mover(intel)
@@ -1252,6 +1295,7 @@ async def post_original_tweet():
             top_tickers=top_tickers,
             ecosystem_comparative=combined_ctx,
             dune_context=dune_ctx,
+            historical_context=historical_ctx,
         )
 
         if DRY_RUN:
@@ -1406,6 +1450,15 @@ async def refresh_intelligence_job():
                 f"priority_originals={kw['originals'][:3]} "
                 f"qt_search={kw['qt_search'][:3]}"
             )
+
+        # Historical snapshot storage (piggybacks on 15-min refresh)
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, lambda: history_tracker.store_snapshots(projects))
+            await loop.run_in_executor(None, history_tracker.cleanup_old_snapshots)
+        except Exception as e:
+            logger.warning(f"history_tracker error: {e}")
+
     except Exception as e:
         logger.error(f"intelligence_job error: {e}")
 

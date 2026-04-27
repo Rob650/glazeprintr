@@ -270,6 +270,40 @@ def init_db():
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_staking_tweet_time', '');
         """)
 
+        # Feature: Historical snapshot system
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS token_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                price REAL,
+                volume_1h REAL,
+                volume_24h REAL,
+                market_cap REAL,
+                buys_1h INTEGER,
+                sells_1h INTEGER,
+                staking_pct REAL,
+                liquidity REAL,
+                snapshot_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_token_snapshots ON token_snapshots(ticker, snapshot_at);
+        """)
+        conn.commit()
+
+        # Feature: Smart wallet profiling
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS wallet_profiles (
+                wallet_address TEXT UNIQUE,
+                label TEXT,
+                tokens_staked TEXT DEFAULT '[]',
+                total_staked_usd REAL DEFAULT 0,
+                max_lock_days INTEGER DEFAULT 0,
+                first_seen TEXT DEFAULT (datetime('now')),
+                last_seen TEXT DEFAULT (datetime('now')),
+                conviction_score INTEGER DEFAULT 0
+            );
+        """)
+        conn.commit()
+
 
 # --- replied_tweets ---
 
@@ -1052,3 +1086,104 @@ def get_ecosystem_context_age_hours() -> float | None:
             return (datetime.now(timezone.utc) - fetched).total_seconds() / 3600
         except (ValueError, TypeError):
             return None
+
+
+# --- token_snapshots ---
+
+def store_token_snapshot(ticker: str, price: float = None, volume_1h: float = None,
+                         volume_24h: float = None, market_cap: float = None,
+                         buys_1h: int = None, sells_1h: int = None,
+                         staking_pct: float = None, liquidity: float = None):
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO token_snapshots
+               (ticker, price, volume_1h, volume_24h, market_cap,
+                buys_1h, sells_1h, staking_pct, liquidity)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ticker.lower(), price, volume_1h, volume_24h, market_cap,
+             buys_1h, sells_1h, staking_pct, liquidity)
+        )
+
+
+def get_token_snapshots(ticker: str, hours: int = 168) -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT price, volume_1h, volume_24h, market_cap,
+                      buys_1h, sells_1h, staking_pct, liquidity, snapshot_at
+               FROM token_snapshots
+               WHERE ticker = ? AND snapshot_at >= datetime('now', ?)
+               ORDER BY snapshot_at ASC""",
+            (ticker.lower(), f"-{hours} hours")
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_ecosystem_snapshots(hours: int = 168) -> list[dict]:
+    """Return hourly-binned total MC and volume across all tokens."""
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT
+                 strftime('%Y-%m-%d %H:00:00', snapshot_at) as hour,
+                 SUM(market_cap) as total_mc,
+                 SUM(volume_24h) as total_volume_24h
+               FROM token_snapshots
+               WHERE snapshot_at >= datetime('now', ?)
+               GROUP BY strftime('%Y-%m-%d %H', snapshot_at)
+               ORDER BY hour ASC""",
+            (f"-{hours} hours",)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def cleanup_old_snapshots(retention_days: int = 30) -> int:
+    with db() as conn:
+        result = conn.execute(
+            "DELETE FROM token_snapshots WHERE snapshot_at < datetime('now', ?)",
+            (f"-{retention_days} days",)
+        )
+        return result.rowcount
+
+
+# --- wallet_profiles ---
+
+def upsert_wallet_profile(wallet_address: str, label: str, tokens_staked: list,
+                          total_staked_usd: float, max_lock_days: int,
+                          conviction_score: int):
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO wallet_profiles
+               (wallet_address, label, tokens_staked, total_staked_usd,
+                max_lock_days, conviction_score, last_seen)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(wallet_address) DO UPDATE SET
+                 label=excluded.label,
+                 tokens_staked=excluded.tokens_staked,
+                 total_staked_usd=excluded.total_staked_usd,
+                 max_lock_days=excluded.max_lock_days,
+                 conviction_score=excluded.conviction_score,
+                 last_seen=datetime('now')""",
+            (wallet_address, label, json.dumps(tokens_staked),
+             total_staked_usd, max_lock_days, conviction_score)
+        )
+
+
+def get_wallet_profiles(label: str = None) -> list[dict]:
+    with db() as conn:
+        if label:
+            rows = conn.execute(
+                "SELECT * FROM wallet_profiles WHERE label = ? ORDER BY conviction_score DESC",
+                (label,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM wallet_profiles ORDER BY conviction_score DESC"
+            ).fetchall()
+        results = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["tokens_staked"] = json.loads(d.get("tokens_staked") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                d["tokens_staked"] = []
+            results.append(d)
+        return results
