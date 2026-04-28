@@ -28,6 +28,7 @@ from database import (
     get_untweeted_burns, mark_burn_tweeted, count_burn_tweets_last_hour,
     recently_tweeted_about_token,
     get_glaze_queue, update_last_glazed,
+    get_recent_tickers, get_wallet_holdings,
 )
 import launch_detector
 import wallet_scanner
@@ -78,6 +79,7 @@ _THREAD_HEAT_THRESHOLD = 85.0
 _THREAD_24H_THRESHOLD = 50.0
 
 _BOT_START_TIME = datetime.now(timezone.utc)
+_last_original_tweet_ticker: str | None = None
 
 _list_poll_since_id: str | None = None  # loaded from DB on first call; List API doesn't support since_id natively
 _list_poll_since_id_loaded: bool = False
@@ -1211,8 +1213,118 @@ async def claim_staking_rewards():
         logger.error(f"claim_staking_rewards error: {e}")
 
 
+def _select_topic_bucket(projects: list[dict]) -> tuple[str, str | None, str]:
+    """
+    Weighted random bucket selection for original tweets.
+    Returns (bucket_name, ticker_or_none, selection_context).
+
+    Bucket weights (100% total):
+      wallet_weighted  25%  — token weighted by bot wallet USD holdings
+      top_mover        10%  — highest 1h/24h price gainer
+      top_mc           15%  — top-5 ecosystem tokens by market cap
+      ecosystem_stats  25%  — aggregate ecosystem metrics (no specific token)
+      comparison       25%  — Printr vs other launchpads (no specific token)
+
+    When ENABLE_WALLET_GLAZING is off or wallet holdings are empty, wallet's 25%
+    is redistributed proportionally to top_mover (+10%) and top_mc (+15%).
+    """
+    # Fetch cached wallet holdings (populated by scan_and_stake every 15 min)
+    wallet_holdings: list[dict] = []
+    if ENABLE_WALLET_GLAZING:
+        try:
+            wallet_holdings = [h for h in get_wallet_holdings() if (h.get("usd_value") or 0) > 0]
+        except Exception as e:
+            logger.warning(f"_select_topic_bucket: wallet lookup failed: {e}")
+
+    has_wallet = bool(wallet_holdings)
+
+    # Bucket weights — redistribute wallet 25% proportionally when wallet is empty
+    buckets = ["wallet_weighted", "top_mover", "top_mc", "ecosystem_stats", "comparison"]
+    if has_wallet:
+        weights = [0.25, 0.10, 0.15, 0.25, 0.25]
+    else:
+        weights = [0.00, 0.20, 0.30, 0.25, 0.25]
+
+    [bucket] = random.choices(buckets, weights=weights, k=1)
+
+    recent_tickers = get_recent_tickers()
+    last_ticker = (_last_original_tweet_ticker or "").lower()
+
+    def _ticker_ok(t: str) -> bool:
+        t_lower = t.lower()
+        return (
+            t_lower != last_ticker
+            and t_lower not in recent_tickers
+            and not recently_tweeted_about_token(t_lower)
+        )
+
+    # ── Bucket 1: Wallet-weighted ──────────────────────────────────────────────
+    if bucket == "wallet_weighted" and has_wallet:
+        total_usd = sum((h.get("usd_value") or 0) for h in wallet_holdings)
+        available = [h for h in wallet_holdings if _ticker_ok(h["ticker"])]
+        pool = available if available else wallet_holdings
+        usd_weights = [(h.get("usd_value") or 0.01) for h in pool]
+        [chosen] = random.choices(pool, weights=usd_weights, k=1)
+        t = chosen["ticker"].lower()
+        pct = (chosen.get("usd_value") or 0) / total_usd * 100 if total_usd > 0 else 0
+        ctx = f"Represents {pct:.0f}% of bot wallet holdings by USD value."
+        logger.info(f"_select_topic_bucket: wallet_weighted → ${t.upper()} ({pct:.0f}% of wallet)")
+        return "wallet_weighted", t, ctx
+
+    # ── Bucket 2: Top movers/gainers ───────────────────────────────────────────
+    if bucket == "top_mover":
+        movers = sorted(
+            [p for p in projects if p.get("price_change_1h") is not None or p.get("price_change_24h") is not None],
+            key=lambda p: max(p.get("price_change_1h") or 0.0, p.get("price_change_24h") or 0.0),
+            reverse=True,
+        )[:5]
+        for m in movers:
+            t = (m.get("name") or "").lower()
+            if t and _ticker_ok(t):
+                chg1h = m.get("price_change_1h") or 0.0
+                chg24h = m.get("price_change_24h") or 0.0
+                ctx = f"Top gainer — 1h: {chg1h:+.1f}%, 24h: {chg24h:+.1f}%."
+                logger.info(f"_select_topic_bucket: top_mover → ${t.upper()} (1h:{chg1h:+.1f}%)")
+                return "top_mover", t, ctx
+        if movers:
+            t = (movers[0].get("name") or "").lower()
+            logger.info(f"_select_topic_bucket: top_mover → ${t.upper()} (all on cooldown, picking best)")
+            return "top_mover", t, "Top gainer (all options on cooldown)."
+
+    # ── Bucket 3: Top market cap ───────────────────────────────────────────────
+    if bucket == "top_mc":
+        top_mc_projects = sorted(
+            [p for p in projects if p.get("market_cap")],
+            key=lambda p: p.get("market_cap") or 0,
+            reverse=True,
+        )[:5]
+        for m in top_mc_projects:
+            t = (m.get("name") or "").lower()
+            if t and _ticker_ok(t):
+                mc = m.get("market_cap") or 0
+                mc_str = f"${mc/1e6:.2f}M" if mc >= 1e6 else f"${mc:,.0f}"
+                ctx = f"Top token by ecosystem market cap ({mc_str})."
+                logger.info(f"_select_topic_bucket: top_mc → ${t.upper()} (MC={mc_str})")
+                return "top_mc", t, ctx
+        if top_mc_projects:
+            t = (top_mc_projects[0].get("name") or "").lower()
+            logger.info(f"_select_topic_bucket: top_mc → ${t.upper()} (all on cooldown, picking #1)")
+            return "top_mc", t, "Top by market cap (all options on cooldown)."
+
+    # ── Bucket 4: Ecosystem stats ──────────────────────────────────────────────
+    if bucket == "ecosystem_stats":
+        logger.info("_select_topic_bucket: ecosystem_stats")
+        return "ecosystem_stats", None, ""
+
+    # ── Bucket 5: Comparison ───────────────────────────────────────────────────
+    logger.info("_select_topic_bucket: comparison")
+    return "comparison", None, ""
+
+
 async def post_original_tweet():
     global _latest_projects, _latest_dune_context, _latest_comparative_context, _latest_intelligence_context
+    global _last_original_tweet_ticker
+
     if is_paused():
         logger.info("Bot paused — skipping original tweet job")
         return
@@ -1340,8 +1452,7 @@ async def post_original_tweet():
 
         # ── Normal single-tweet path ─────────────────────────────────────────────
 
-        # Check wallet glaze queue: if a paid token is due, prioritize it as subject.
-        # Tweet still uses full intelligence context — only the ticker is forced.
+        # Check wallet glaze queue: paid glazes jump the queue and override bucket selection.
         paid_glaze_ticker: str | None = None
         if ENABLE_WALLET_GLAZING:
             try:
@@ -1357,6 +1468,13 @@ async def post_original_tweet():
             except Exception as e:
                 logger.warning(f"Glaze queue check failed: {e}")
 
+        # Bucket selection: paid glaze takes priority; otherwise use weighted 5-bucket system.
+        bucket_name: str | None = None
+        bucket_ticker: str | None = None
+        bucket_ctx: str = ""
+        if not paid_glaze_ticker:
+            bucket_name, bucket_ticker, bucket_ctx = _select_topic_bucket(projects)
+
         memory_context = mem.get_memory_context()
         top_tickers = _get_top_tickers(10)
         tweet_text, img_path = generate_original_tweet(
@@ -1366,24 +1484,33 @@ async def post_original_tweet():
             ecosystem_comparative=combined_ctx,
             dune_context=dune_ctx,
             historical_context=historical_ctx,
-            forced_ticker=paid_glaze_ticker,
+            forced_ticker=paid_glaze_ticker or bucket_ticker,
             paid_glaze=paid_glaze_ticker is not None,
+            bucket_name=bucket_name,
+            bucket_context=bucket_ctx,
         )
 
+        effective_ticker = paid_glaze_ticker or bucket_ticker
+
         if DRY_RUN:
-            logger.info(f"[DRY RUN] Original tweet img={'yes' if img_path else 'no'}: {tweet_text}")
+            logger.info(f"[DRY RUN] Original tweet bucket={bucket_name} ticker={effective_ticker} img={'yes' if img_path else 'no'}: {tweet_text}")
             record_original_tweet("dry_run", tweet_text, dry_run=True)
             if paid_glaze_ticker:
                 update_last_glazed(paid_glaze_ticker)
+            _last_original_tweet_ticker = effective_ticker
         else:
             posted_hour = datetime.now(timezone.utc).hour
             tweet_id = post_tweet(tweet_text, media_path=img_path)
             if tweet_id:
                 record_original_tweet(tweet_id, tweet_text, dry_run=False)
                 record_tweet_performance(tweet_id, posted_hour)
-                logger.info(f"Posted original tweet {tweet_id} img={'yes' if img_path else 'no'}: {tweet_text[:60]}...")
+                logger.info(
+                    f"Posted original tweet {tweet_id} bucket={bucket_name} ticker={effective_ticker} "
+                    f"img={'yes' if img_path else 'no'}: {tweet_text[:60]}..."
+                )
                 if paid_glaze_ticker:
                     update_last_glazed(paid_glaze_ticker)
+                _last_original_tweet_ticker = effective_ticker
             else:
                 logger.warning("Failed to post original tweet")
     except Exception as e:

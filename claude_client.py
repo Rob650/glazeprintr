@@ -167,6 +167,71 @@ _PLATFORM_TOPICS = [
      "Spotlight $PRINT — the native asset. 'Every token on Printr is a bet on one project. $PRINT is a bet on the whole platform.' What holding it means for exposure to everything built on top. Do NOT include any contract address."),
 ]
 
+# ── Bucket 4: Printr ecosystem stats (25% of original tweets) ────────────────
+_ECOSYSTEM_STATS_TOPICS = [
+    ("ecosystem_staking_tvl",
+     "Lead with total staking TVL across all Printr ecosystem tokens. Sum the value locked from the market data. "
+     "'X% of ecosystem market cap is staked' energy. Conviction isn't a vibe — it's a number. Make the aggregate feel massive."),
+    ("ecosystem_volume",
+     "Total ecosystem 24h trading volume — lead with the aggregate number. "
+     "'The Printr ecosystem did $X in volume today' framing. Volume is the real adoption metric, not price. "
+     "Use the data to make it concrete — break it down by token if relevant."),
+    ("token_launch_survival",
+     "Token launch count and survival rate. How many tokens on Printr? What % are still actively trading? "
+     "'X tokens launched. X% still live.' Survival rate destroys pump.fun in one sentence — use the contrast."),
+    ("staking_participation_rates",
+     "Staking participation across the ecosystem — what % of supply is staked per token? "
+     "Aggregate the data. 'The average Printr token has X% of supply staked.' That's supply compression happening in real time. "
+     "Name the top staker if data is available."),
+    ("ecosystem_holder_growth",
+     "Total holders or wallet growth across the ecosystem. Frame holder count as proof of real adoption. "
+     "'X unique wallets hold Printr ecosystem tokens' — each one is a new participant in the flywheel. "
+     "If trending up, make it feel like a train leaving the station."),
+    ("avg_lock_durations",
+     "Average lock durations and the 2.5× multiplier at 180 days. Frame as the ultimate conviction signal. "
+     "'180-day lockers aren't checking the chart every hour. They check it every quarter.' "
+     "Use any staking tier data available. The math is the hook."),
+    ("buyback_burn_totals",
+     "Buyback and burn totals across the ecosystem. Every trade triggers a buyback. "
+     "'The ecosystem has burned $X worth of supply' energy. Use any burn or volume data. "
+     "Deflationary tokenomics aren't a roadmap item — they're live on every transaction."),
+]
+
+# ── Bucket 5: Comparison tweets (25% of original tweets) ─────────────────────
+_COMPARISON_TOPICS = [
+    ("survival_rate_comparison",
+     "Survival rate: Printr tokens have a 6%+ live rate vs <1% on pump.fun. "
+     "Lead with the contrast. '99% of pump.fun tokens are dead within 24h. Printr tokens have staking, buybacks, and real holders.' "
+     "The data makes the argument — you just have to cite it. One sharp number, one sharp contrast."),
+    ("pob_vs_fair_launch",
+     "POB tokenomics vs fair launch: Printr's Proof-of-Belief model aligns incentives — stakers earn platform fees. "
+     "Fair launches have zero yield, no lock-up incentives, no skin in the game. "
+     "'pump.fun: launch and dump. Printr: launch, stake, earn.' That's the whole thesis in one line."),
+    ("real_yield_comparison",
+     "Real yield comparison: POB stakers earn 100% of custom trading fees. "
+     "Name another launchpad where fees go back to token holders instead of the dev team. "
+     "'pump.fun takes the fees. Printr shares them.' One sentence. That's the entire pitch."),
+    ("buyback_burn_vs_nothing",
+     "Buyback-burn mechanics comparison: every Printr trade has an algorithmic buyback built in. "
+     "Pump.fun has no buyback mechanism. "
+     "'Every $TOKEN trade buys back $TOKEN. Every pump.fun trade just... happens.' "
+     "Deflationary by design vs inflationary by neglect. Use a real ecosystem token as the example."),
+    ("staking_vs_no_staking",
+     "Staking vs no staking: Printr tokens have POB staking with real yield. "
+     "Pump.fun tokens have nothing after launch — buy, hold, hope. "
+     "'On Printr, you stake and earn. On pump.fun, you hold and pray.' "
+     "Use actual staking % data from the market data to make it concrete."),
+    ("api_automation_edge",
+     "API and automation: Printr has a TypeScript SDK, MCP server, white-label API. "
+     "AI agents can launch tokens, configure bonding curves, manage positions programmatically. "
+     "Pump.fun requires a browser. "
+     "'The next wave of launches will be autonomous. Only one launchpad is built for that.' Make it feel inevitable."),
+    ("ecosystem_vs_isolated",
+     "Ecosystem vs isolated tokens: each pump.fun token lives and dies alone. "
+     "Printr tokens share staking infrastructure, buyback mechanics, and ecosystem liquidity. "
+     "'A rising tide lifts all boats. Printr is the tide.' "
+     "Reference ecosystem total MC or volume from the data to make it concrete."),
+]
 
 # ── Injected into the user message for Dune + Platform buckets ───────────────
 _ECOSYSTEM_GLAZE_NOTE = (
@@ -850,7 +915,9 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
                             dune_context: str = "",
                             historical_context: str = "",
                             forced_ticker: str | None = None,
-                            paid_glaze: bool = False) -> tuple[str, str | None]:
+                            paid_glaze: bool = False,
+                            bucket_name: str | None = None,
+                            bucket_context: str = "") -> tuple[str, str | None]:
     system = SYSTEM_PROMPT_BASE + "\n\n" + ORIGINAL_TWEET_PROMPT
 
     ecosystem_ctx = get_ecosystem_context_for_prompt()
@@ -958,82 +1025,121 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     if banned:
         user_message += f"BANNED OPENERS — do NOT start your tweet with any of these phrases: {', '.join(banned)}\n\n"
 
-    # Enforce exact tweet distribution via weighted random bucket selection:
-    # 20% $FATCHOI glaze | 30% other-ticker glaze | 25% Dune/competitors | 25% platform topics
-    # Cooldown: exclude the last 4 tickers used so no single token dominates.
+    # 5-bucket topic allocation — bucket selected externally by _select_topic_bucket() in bot.py.
+    # Token tweets (50%): wallet_weighted | top_mover | top_mc  →  forced_ticker is set
+    # Non-token tweets (50%): ecosystem_stats | comparison       →  bucket_name drives topic pool
+    # Legacy fallback (bucket_name=None): original 4-bucket random roll preserved for backward compat.
     recent_tickers = get_recent_tickers()
-    roll = random.random()
     chosen_ticker = None
-
     pattern_context = ""
+    ticker_note = ""
+
+    meme_angles = (
+        "grindset, price shock, holder psychology, community callout, "
+        "philosophical conviction, absurdist humor, or pure price action"
+    )
 
     if forced_ticker:
-        # Wallet glaze queue override: a token with community backing is due for a glaze.
-        # Uses full intelligence context (market data, setups, history) — only the subject is forced.
         ticker = forced_ticker.lower()
-        meme_angles = (
-            "grindset, price shock, holder psychology, community callout, "
-            "philosophical conviction, absurdist humor, or pure price action"
-        )
-        topic_instruction = (
-            f"Spotlight ${ticker.upper()} with maximum conviction — pick ONE angle: {meme_angles}. "
-            f"Lead with its best live stat if available. Focus entirely on ${ticker.upper()}."
-        )
-        if paid_glaze:
-            topic_instruction += (
-                " This token has community backing — holders are actively depositing to support it. "
-                "Write with extra conviction and detail."
+        # Topic instruction varies by which token bucket sourced this ticker
+        if bucket_name == "wallet_weighted":
+            topic_instruction = (
+                f"Spotlight ${ticker.upper()} — it's the bot's top wallet holding by USD value. "
+                f"Pick ONE angle: {meme_angles}. Lead with its best live stat. "
+                f"Channel maximum holder conviction. Focus entirely on ${ticker.upper()}."
             )
-        topics = [(f"{ticker}_paid_glaze", topic_instruction)]
+            if bucket_context:
+                topic_instruction += f" ({bucket_context})"
+        elif bucket_name == "top_mover":
+            topic_instruction = (
+                f"Spotlight ${ticker.upper()} — it's a top gainer in the ecosystem right now. "
+                f"Lead with the price action. Pick ONE angle: {meme_angles}. "
+                f"Make the move feel like breaking news. Focus entirely on ${ticker.upper()}."
+            )
+            if bucket_context:
+                topic_instruction += f" ({bucket_context})"
+        elif bucket_name == "top_mc":
+            topic_instruction = (
+                f"Spotlight ${ticker.upper()} — a top token by ecosystem market cap. "
+                f"Lead with its dominance or MC figure. Pick ONE angle: {meme_angles}. "
+                f"Focus entirely on ${ticker.upper()}."
+            )
+            if bucket_context:
+                topic_instruction += f" ({bucket_context})"
+        else:
+            # Paid glaze / legacy forced_ticker path
+            topic_instruction = (
+                f"Spotlight ${ticker.upper()} with maximum conviction — pick ONE angle: {meme_angles}. "
+                f"Lead with its best live stat if available. Focus entirely on ${ticker.upper()}."
+            )
+            if paid_glaze:
+                topic_instruction += (
+                    " This token has community backing — holders are actively depositing to support it. "
+                    "Write with extra conviction and detail."
+                )
+        topics = [(f"{ticker}_{bucket_name or 'spotlight'}", topic_instruction)]
         ticker_note = f"SINGLE TICKER RULE: this tweet is about ${ticker.upper()} only — no other cashtags.\n\n"
         chosen_ticker = ticker
         ticker_data = next(
             (p for p in (market_data or []) if p.get("name", "").lower() == ticker), {}
         )
         pattern_context = get_evolution_context(ticker, ticker_data)
-    elif roll < 0.20 and "fatchoi" not in recent_tickers:
-        topics = _FATCHOI_TOPICS
-        ticker_note = "SINGLE TICKER RULE: this tweet is about $FATCHOI only — no other cashtags.\n\n"
-        chosen_ticker = "fatchoi"
-        # Inject evolution context for FATCHOI using its market data if available
-        fatchoi_data = next((p for p in (market_data or []) if p.get("name", "").lower() == "fatchoi"), {})
-        pattern_context = get_evolution_context("fatchoi", fatchoi_data)
-    elif roll < 0.50:
-        # Also catches the FATCHOI redirect (roll < 0.20 but fatchoi is on cooldown)
-        available = [t for t in _OTHER_TICKERS if t not in recent_tickers]
-        ticker = _pick_ticker_by_momentum(available or _OTHER_TICKERS)
-        meme_angles = (
-            "grindset, price shock, holder psychology, community callout, "
-            "philosophical conviction, absurdist humor, or pure price action"
-        )
-        topics = [(
-            f"{ticker}_spotlight",
-            f"Spotlight ${ticker.upper()} with meme energy — pick ONE angle: {meme_angles}. "
-            f"Lead with its best live stat if available. Focus entirely on ${ticker.upper()}.",
-        )]
-        ticker_note = f"SINGLE TICKER RULE: this tweet is about ${ticker.upper()} only — no other cashtags.\n\n"
-        chosen_ticker = ticker
-        # Inject evolution context for this specific ticker
-        ticker_data = next((p for p in (market_data or []) if p.get("name", "").lower() == ticker.lower()), {})
-        pattern_context = get_evolution_context(ticker, ticker_data)
-    elif roll < 0.75:
+
+    elif bucket_name == "ecosystem_stats":
         recent_topics = get_recent_topics()
-        available_dune = [t for t in _DUNE_COMPETITOR_TOPICS if t[0] not in recent_topics]
-        topics = available_dune or _DUNE_COMPETITOR_TOPICS
+        available_ecosystem = [t for t in _ECOSYSTEM_STATS_TOPICS if t[0] not in recent_topics]
+        topics = available_ecosystem or _ECOSYSTEM_STATS_TOPICS
         _example_pool = [t for t in _OTHER_TICKERS if t not in recent_tickers] or _OTHER_TICKERS
         _example = random.choice(_example_pool)
         ticker_note = _ECOSYSTEM_GLAZE_NOTE + f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
-        # Competitive edge or trading UX parallel — alternate randomly
-        pattern_context = get_competitive_edge_context() if random.random() < 0.6 else get_trading_ux_parallel()
-    else:
+        pattern_context = get_competitive_edge_context() if random.random() < 0.5 else get_trading_ux_parallel()
+
+    elif bucket_name == "comparison":
         recent_topics = get_recent_topics()
-        available_platform = [t for t in _PLATFORM_TOPICS if t[0] not in recent_topics]
-        topics = available_platform or _PLATFORM_TOPICS
+        available_comparison = [t for t in _COMPARISON_TOPICS if t[0] not in recent_topics]
+        topics = available_comparison or _COMPARISON_TOPICS
         _example_pool = [t for t in _OTHER_TICKERS if t not in recent_tickers] or _OTHER_TICKERS
         _example = random.choice(_example_pool)
         ticker_note = _ECOSYSTEM_GLAZE_NOTE + f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
-        # Trading UX parallel fits platform-mechanics topics well
         pattern_context = get_trading_ux_parallel() if random.random() < 0.5 else get_competitive_edge_context()
+
+    else:
+        # Legacy fallback: old 4-bucket random roll (used when no bucket_name provided)
+        roll = random.random()
+        if roll < 0.20 and "fatchoi" not in recent_tickers:
+            topics = _FATCHOI_TOPICS
+            ticker_note = "SINGLE TICKER RULE: this tweet is about $FATCHOI only — no other cashtags.\n\n"
+            chosen_ticker = "fatchoi"
+            fatchoi_data = next((p for p in (market_data or []) if p.get("name", "").lower() == "fatchoi"), {})
+            pattern_context = get_evolution_context("fatchoi", fatchoi_data)
+        elif roll < 0.50:
+            available = [t for t in _OTHER_TICKERS if t not in recent_tickers]
+            ticker = _pick_ticker_by_momentum(available or _OTHER_TICKERS)
+            topics = [(
+                f"{ticker}_spotlight",
+                f"Spotlight ${ticker.upper()} with meme energy — pick ONE angle: {meme_angles}. "
+                f"Lead with its best live stat if available. Focus entirely on ${ticker.upper()}.",
+            )]
+            ticker_note = f"SINGLE TICKER RULE: this tweet is about ${ticker.upper()} only — no other cashtags.\n\n"
+            chosen_ticker = ticker
+            ticker_data = next((p for p in (market_data or []) if p.get("name", "").lower() == ticker.lower()), {})
+            pattern_context = get_evolution_context(ticker, ticker_data)
+        elif roll < 0.75:
+            recent_topics = get_recent_topics()
+            available_dune = [t for t in _DUNE_COMPETITOR_TOPICS if t[0] not in recent_topics]
+            topics = available_dune or _DUNE_COMPETITOR_TOPICS
+            _example_pool = [t for t in _OTHER_TICKERS if t not in recent_tickers] or _OTHER_TICKERS
+            _example = random.choice(_example_pool)
+            ticker_note = _ECOSYSTEM_GLAZE_NOTE + f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
+            pattern_context = get_competitive_edge_context() if random.random() < 0.6 else get_trading_ux_parallel()
+        else:
+            recent_topics = get_recent_topics()
+            available_platform = [t for t in _PLATFORM_TOPICS if t[0] not in recent_topics]
+            topics = available_platform or _PLATFORM_TOPICS
+            _example_pool = [t for t in _OTHER_TICKERS if t not in recent_tickers] or _OTHER_TICKERS
+            _example = random.choice(_example_pool)
+            ticker_note = _ECOSYSTEM_GLAZE_NOTE + f"ROTATION RULE: If your tweet references a specific ecosystem token as an example, use ${_example.upper()} — rotate the full ecosystem, never default to the same token repeatedly.\n\n"
+            pattern_context = get_trading_ux_parallel() if random.random() < 0.5 else get_competitive_edge_context()
 
     if pattern_context:
         user_message += pattern_context + "\n\n"
