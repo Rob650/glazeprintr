@@ -985,7 +985,7 @@ def poll_whale_activity():
         logger.info(f"Whale tweet rate limit reached ({tweets_this_hour}/{MAX_WHALE_TWEETS_PER_HOUR}/hr) — skipping")
         return
 
-    untweeted = get_untweeted_whale_transactions(max_count=MAX_WHALE_TWEETS_PER_HOUR - tweets_this_hour)
+    untweeted = get_untweeted_whale_transactions(limit=MAX_WHALE_TWEETS_PER_HOUR - tweets_this_hour)
     if not untweeted:
         logger.info("No untweeted whale moves to post")
         return
