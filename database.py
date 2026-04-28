@@ -304,6 +304,19 @@ def init_db():
         """)
         conn.commit()
 
+        # Feature: Auto-claim staking rewards
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS reward_claims (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_ticker TEXT,
+                position_id TEXT,
+                amount_claimed REAL,
+                claimed_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_reward_claims_at ON reward_claims(claimed_at);
+        """)
+        conn.commit()
+
         # Feature: Wallet glazing — bot's own deposit wallet tracking
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS wallet_holdings (
@@ -1293,3 +1306,14 @@ def get_confirmed_staked_amounts() -> dict[str, float]:
                GROUP BY ticker"""
         ).fetchall()
         return {r["ticker"]: r["total"] for r in rows}
+
+
+# --- reward_claims ---
+
+def record_reward_claim(token_ticker: str, position_id: str, amount_claimed: float):
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO reward_claims (token_ticker, position_id, amount_claimed)
+               VALUES (?, ?, ?)""",
+            (token_ticker.lower(), position_id, amount_claimed)
+        )

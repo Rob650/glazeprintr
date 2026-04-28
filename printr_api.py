@@ -271,6 +271,30 @@ def fetch_positions_with_rewards(mint_address: str) -> list[dict]:
     return data.get("positions") or data.get("data") or []
 
 
+def claim_rewards(position_id: str, wallet_address: str, mint_address: str) -> Optional[dict]:
+    """POST /v1/staking/claim-rewards — claim pending rewards for a position. Returns result or None."""
+    global _cached_cookie
+    cookie = get_cookie()
+    if not cookie:
+        logger.warning("Printr API: no cookie — cannot claim rewards")
+        return None
+
+    payload = {
+        "position_id":   position_id,
+        "wallet_address": wallet_address,
+        "mint_address":  mint_address,
+    }
+    data = _post_api("/staking/claim-rewards", payload, cookie)
+    if data is None:
+        # Might be session expiry — retry once with fresh auth
+        invalidate_cookie()
+        cookie = get_cookie()
+        if not cookie:
+            return None
+        data = _post_api("/staking/claim-rewards", payload, cookie)
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Token discovery from staking data
 # ---------------------------------------------------------------------------

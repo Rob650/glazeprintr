@@ -496,3 +496,76 @@ async def scan_and_stake() -> None:
     """Async entry point: runs the full scan-and-stake pipeline in a thread executor."""
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _scan_and_stake_sync)
+
+
+# ---------------------------------------------------------------------------
+# Auto-claim staking rewards
+# ---------------------------------------------------------------------------
+
+def _claim_staking_rewards_sync() -> None:
+    """
+    For every known ecosystem token, fetch positions with unclaimed rewards belonging
+    to the bot wallet, call claim-rewards for each, and record in reward_claims table.
+    """
+    from printr_api import fetch_positions_with_rewards, claim_rewards  # type: ignore
+    from scraper import KNOWN_CONTRACTS  # type: ignore
+
+    if not BOT_WALLET_ADDRESS:
+        logger.info("AUTO-CLAIM: BOT_WALLET_ADDRESS not set — skipping")
+        return
+
+    total_claimed = 0
+    for ticker, mint_address in KNOWN_CONTRACTS.items():
+        try:
+            positions = fetch_positions_with_rewards(mint_address)
+        except Exception as e:
+            logger.warning(f"AUTO-CLAIM: fetch_positions_with_rewards {ticker}: {e}")
+            continue
+
+        for pos in positions:
+            # Only claim positions belonging to the bot wallet
+            pos_wallet = (
+                pos.get("wallet_address")
+                or pos.get("owner")
+                or (pos.get("user") or {}).get("wallet_address", "")
+            )
+            if pos_wallet and pos_wallet != BOT_WALLET_ADDRESS:
+                continue
+
+            position_id = pos.get("position_id") or pos.get("id") or ""
+            if not position_id:
+                continue
+
+            # Flexible reward amount extraction
+            rewards = pos.get("rewards") or pos.get("unclaimed_rewards") or {}
+            if isinstance(rewards, dict):
+                amount = float(rewards.get("amount") or rewards.get("unclaimed") or 0)
+            else:
+                try:
+                    amount = float(rewards)
+                except (TypeError, ValueError):
+                    amount = 0.0
+
+            if amount <= 0:
+                continue
+
+            logger.info(f"AUTO-CLAIM: claiming {amount:.6f} {ticker} for position {position_id}")
+            try:
+                result = claim_rewards(str(position_id), BOT_WALLET_ADDRESS, mint_address)
+                if result is not None:
+                    tx = result.get("tx_hash") or result.get("signature") or "submitted"
+                    db.record_reward_claim(ticker, str(position_id), amount)
+                    total_claimed += 1
+                    logger.info(f"AUTO-CLAIM: {ticker} {amount:.6f} tokens claimed — tx={tx}")
+                else:
+                    logger.warning(f"AUTO-CLAIM: claim_rewards returned None for {ticker} position {position_id}")
+            except Exception as e:
+                logger.warning(f"AUTO-CLAIM: error claiming {ticker} position {position_id}: {e}")
+
+    logger.info(f"AUTO-CLAIM: complete — {total_claimed} positions claimed")
+
+
+async def claim_staking_rewards() -> None:
+    """Async entry point: claims pending staking rewards for all eligible bot positions."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _claim_staking_rewards_sync)

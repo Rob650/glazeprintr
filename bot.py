@@ -72,6 +72,7 @@ ENABLE_CORRELATION_TWEETS = os.environ.get("ENABLE_CORRELATION_TWEETS", "false")
 ENABLE_STAKING_TWEETS = os.environ.get("ENABLE_STAKING_TWEETS", "false").lower() == "true"
 ENABLE_WALLET_PROFILING = os.environ.get("ENABLE_WALLET_PROFILING", "false").lower() == "true"
 ENABLE_WALLET_GLAZING = os.environ.get("ENABLE_WALLET_GLAZING", "false").lower() == "true"
+ENABLE_AUTO_CLAIM_REWARDS = os.environ.get("ENABLE_AUTO_CLAIM_REWARDS", "false").lower() == "true"
 MAX_THREADS_PER_DAY = 2
 _THREAD_HEAT_THRESHOLD = 85.0
 _THREAD_24H_THRESHOLD = 50.0
@@ -1198,6 +1199,16 @@ async def scan_and_stake():
         await wallet_scanner.scan_and_stake()
     except Exception as e:
         logger.error(f"scan_and_stake error: {e}")
+
+
+async def claim_staking_rewards():
+    """Claim pending staking rewards for all eligible bot positions. Runs weekly."""
+    if not ENABLE_AUTO_CLAIM_REWARDS:
+        return
+    try:
+        await wallet_scanner.claim_staking_rewards()
+    except Exception as e:
+        logger.error(f"claim_staking_rewards error: {e}")
 
 
 async def post_original_tweet():

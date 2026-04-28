@@ -32,6 +32,7 @@ ENABLE_REWARDS_DATA = os.environ.get("ENABLE_REWARDS_DATA", "false").lower() == 
 ENABLE_LAUNCH_GUIDE = os.environ.get("ENABLE_LAUNCH_GUIDE", "false").lower() == "true"
 ENABLE_WALLET_PROFILING = os.environ.get("ENABLE_WALLET_PROFILING", "false").lower() == "true"
 ENABLE_WALLET_GLAZING = os.environ.get("ENABLE_WALLET_GLAZING", "false").lower() == "true"
+ENABLE_AUTO_CLAIM_REWARDS = os.environ.get("ENABLE_AUTO_CLAIM_REWARDS", "false").lower() == "true"
 
 scheduler = AsyncIOScheduler()
 
@@ -127,6 +128,9 @@ async def lifespan(app: FastAPI):
     if ENABLE_WALLET_GLAZING:
         scheduler.add_job(bot.scan_and_stake, "interval", minutes=15, id="wallet_glazer", replace_existing=True,
                           max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    if ENABLE_AUTO_CLAIM_REWARDS:
+        scheduler.add_job(bot.claim_staking_rewards, "interval", seconds=604800, id="rewards_claimer", replace_existing=True,
+                          max_instances=1, coalesce=True, misfire_grace_time=3600, next_run_time=_now)
     scheduler.start()
     launch_detection_status = "launch detection (10 min)" if ENABLE_LAUNCH_DETECTION else "launch detection DISABLED"
     whale_status = "whale tracking (15 min)" if ENABLE_WHALE_TRACKING else "whale tracking DISABLED"
@@ -140,13 +144,14 @@ async def lifespan(app: FastAPI):
     staking_status = "staking tweets (12h)" if ENABLE_STAKING_TWEETS else "staking tweets DISABLED"
     wallet_status = "wallet profiling (6h)" if ENABLE_WALLET_PROFILING else "wallet profiling DISABLED"
     glazing_status = "wallet glazing (15 min)" if ENABLE_WALLET_GLAZING else "wallet glazing DISABLED"
+    auto_claim_status = "auto-claim rewards (weekly)" if ENABLE_AUTO_CLAIM_REWARDS else "auto-claim rewards DISABLED"
     logger.info(
         f"Schedulers started: mentions (5 min), QT glazer (30 min), original tweets ({time_opt_status}), "
         f"intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h), "
         f"{launch_detection_status}, {whale_status}, {competitor_status}, {thread_mode_status}, "
         f"{correlation_status}, {staking_status}, "
-        f"{burn_status}, {rewards_status}, {launch_guide_status}, {wallet_status}, {glazing_status} — "
-        f"list poller DISABLED, follower scan DISABLED"
+        f"{burn_status}, {rewards_status}, {launch_guide_status}, {wallet_status}, {glazing_status}, "
+        f"{auto_claim_status} — list poller DISABLED, follower scan DISABLED"
     )
 
     yield
