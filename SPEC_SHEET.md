@@ -561,3 +561,4 @@ ENABLE_TIME_OPTIMIZATION
 - Check `/status` endpoint (requires `DASHBOARD_TOKEN`) — shows paused state, recent tweets
 - Monitor logs for `[DRY RUN]` prefix (should be absent when live)
 - Watch for `QUOTE_TWEET_FORBIDDEN` errors — indicates the QT target has restricted quotes
+
