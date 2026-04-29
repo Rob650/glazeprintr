@@ -84,7 +84,7 @@ _last_original_tweet_ticker: str | None = None
 
 # Global post-rate limiter: no more than 1 tweet/QT every 30 minutes combined.
 _last_any_post_time: datetime | None = None
-_MIN_POST_INTERVAL_MINUTES = 30
+_MIN_POST_INTERVAL_MINUTES = 29
 _post_rate_lock = threading.Lock()
 
 
