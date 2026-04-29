@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import re
+import threading
 from datetime import datetime, timezone, timedelta
 
 from database import (
@@ -84,6 +85,29 @@ _last_original_tweet_ticker: str | None = None
 # Global post-rate limiter: no more than 1 tweet/QT every 30 minutes combined.
 _last_any_post_time: datetime | None = None
 _MIN_POST_INTERVAL_MINUTES = 30
+_post_rate_lock = threading.Lock()
+
+
+def _check_and_claim_post_slot(caller: str = "") -> bool:
+    """Thread-safe 30-min rate limit check + atomic claim.
+
+    Returns True if posting is allowed (and pre-claims the slot so no concurrent
+    job can also claim it). Returns False if still within the cooldown window.
+    """
+    global _last_any_post_time
+    with _post_rate_lock:
+        now = datetime.now(timezone.utc)
+        if _last_any_post_time is not None:
+            elapsed = (now - _last_any_post_time).total_seconds() / 60
+            if elapsed < _MIN_POST_INTERVAL_MINUTES:
+                logger.info(
+                    f"Global rate limit: last post was {elapsed:.1f} min ago — skipping {caller} "
+                    f"(min interval {_MIN_POST_INTERVAL_MINUTES} min)"
+                )
+                return False
+        # Pre-claim the slot to prevent any concurrent job from also firing.
+        _last_any_post_time = now
+        return True
 
 _list_poll_since_id: str | None = None  # loaded from DB on first call; List API doesn't support since_id natively
 _list_poll_since_id_loaded: bool = False
@@ -735,20 +759,14 @@ def poll_follower_tweets():
 
 
 def poll_qt_glazer_list():
-    global _qt_glazer_since_id, _qt_glazer_since_id_loaded, _last_any_post_time
+    global _qt_glazer_since_id, _qt_glazer_since_id_loaded
 
     if is_paused():
         logger.info("Bot paused — skipping QT Glazer poll")
         return
 
-    if _last_any_post_time is not None:
-        elapsed = (datetime.now(timezone.utc) - _last_any_post_time).total_seconds() / 60
-        if elapsed < _MIN_POST_INTERVAL_MINUTES:
-            logger.info(
-                f"Global rate limit: last post was {elapsed:.1f} min ago — skipping QT Glazer "
-                f"(min interval {_MIN_POST_INTERVAL_MINUTES} min)"
-            )
-            return
+    if not _check_and_claim_post_slot("QT Glazer"):
+        return
 
     if not _qt_glazer_since_id_loaded:
         _qt_glazer_since_id = get_qt_glazer_since_id()
@@ -899,7 +917,6 @@ def poll_qt_glazer_list():
     qt_tweet_id = None
     if DRY_RUN:
         logger.info(f"[DRY RUN] QT Glazer @{author_handle} score={best_score}: {quote_text[:80]}...")
-        _last_any_post_time = datetime.now(timezone.utc)
     else:
         qt_tweet_id = post_quote_tweet(quote_text, tweet_id, author_handle=author_handle, media_path=meme_path)
         if qt_tweet_id == QUOTE_TWEET_FORBIDDEN:
@@ -908,7 +925,6 @@ def poll_qt_glazer_list():
         if not qt_tweet_id:
             logger.warning(f"QT post failed for {tweet_id}")
             return
-        _last_any_post_time = datetime.now(timezone.utc)
         logger.info(f"QT Glazer posted: {qt_tweet_id} score={best_score} — {quote_text[:60]}...")
 
     record_quote_tweet(
@@ -948,6 +964,9 @@ async def poll_new_launches():
     for launch in untweeted:
         if alerts_this_hour >= MAX_LAUNCH_ALERTS_PER_HOUR:
             logger.info("Launch alert rate limit reached mid-batch — stopping")
+            break
+
+        if not _check_and_claim_post_slot(f"launch alert ${launch.get('ticker', '?').upper()}"):
             break
 
         ticker = launch.get("ticker", "?")
@@ -1013,6 +1032,9 @@ def poll_whale_activity():
     for tx in untweeted:
         if count_whale_tweets_last_hour() >= MAX_WHALE_TWEETS_PER_HOUR:
             logger.info("Whale tweet rate limit reached mid-batch — stopping")
+            break
+
+        if not _check_and_claim_post_slot(f"whale tweet ${tx['token_ticker'].upper()}"):
             break
 
         ticker = tx["token_ticker"]
@@ -1091,6 +1113,9 @@ async def poll_burn_events():
     for burn in untweeted:
         if count_burn_tweets_last_hour() >= MAX_BURN_TWEETS_PER_HOUR:
             logger.info("Burn tweet rate limit reached mid-batch — stopping")
+            break
+
+        if not _check_and_claim_post_slot(f"burn tweet ${burn['ticker'].upper()}"):
             break
 
         ticker = burn["ticker"]
@@ -1338,20 +1363,14 @@ def _select_topic_bucket(projects: list[dict]) -> tuple[str, str | None, str]:
 
 async def post_original_tweet():
     global _latest_projects, _latest_dune_context, _latest_comparative_context, _latest_intelligence_context
-    global _last_original_tweet_ticker, _last_any_post_time
+    global _last_original_tweet_ticker
 
     if is_paused():
         logger.info("Bot paused — skipping original tweet job")
         return
 
-    if _last_any_post_time is not None:
-        elapsed = (datetime.now(timezone.utc) - _last_any_post_time).total_seconds() / 60
-        if elapsed < _MIN_POST_INTERVAL_MINUTES:
-            logger.info(
-                f"Global rate limit: last post was {elapsed:.1f} min ago — skipping original tweet "
-                f"(min interval {_MIN_POST_INTERVAL_MINUTES} min)"
-            )
-            return
+    if not _check_and_claim_post_slot("original tweet"):
+        return
 
     logger.info("Running original tweet job...")
     try:
@@ -1464,13 +1483,11 @@ async def post_original_tweet():
                     for i, t in enumerate(thread_tweets, 1):
                         logger.info(f"  [{i}/3] {t}")
                     record_thread_post("dry_run", ticker, "big_mover", dry_run=True)
-                    _last_any_post_time = datetime.now(timezone.utc)
                 else:
                     first_tweet_id = post_thread(thread_tweets, media_path=thread_img_path)
                     if first_tweet_id:
                         record_thread_post(first_tweet_id, ticker, "big_mover", dry_run=False)
                         record_tweet_performance(first_tweet_id, posted_hour)
-                        _last_any_post_time = datetime.now(timezone.utc)
                         logger.info(f"Posted thread {first_tweet_id} for ${ticker.upper()}")
                     else:
                         logger.warning(f"Thread post failed for ${ticker.upper()}")
@@ -1524,7 +1541,6 @@ async def post_original_tweet():
             if paid_glaze_ticker:
                 update_last_glazed(paid_glaze_ticker)
             _last_original_tweet_ticker = effective_ticker
-            _last_any_post_time = datetime.now(timezone.utc)
         else:
             posted_hour = datetime.now(timezone.utc).hour
             tweet_id = post_tweet(tweet_text, media_path=img_path)
@@ -1538,7 +1554,6 @@ async def post_original_tweet():
                 if paid_glaze_ticker:
                     update_last_glazed(paid_glaze_ticker)
                 _last_original_tweet_ticker = effective_ticker
-                _last_any_post_time = datetime.now(timezone.utc)
             else:
                 logger.warning("Failed to post original tweet")
     except Exception as e:
@@ -1587,6 +1602,9 @@ async def check_correlations():
     tokens_involved = event.get("tokens_involved", [])
     top_ticker = max(tokens_involved, key=lambda t: t["change"])["ticker"].lower() if tokens_involved else None
     img_path = _pick_meme(top_ticker) if top_ticker else None
+
+    if not _check_and_claim_post_slot(f"correlation tweet ({event['event_type']})"):
+        return
 
     if DRY_RUN:
         logger.info(f"[DRY RUN] Correlation tweet ({event['event_type']}) img={'yes' if img_path else 'no'}: {tweet_text[:100]}...")
@@ -1650,6 +1668,9 @@ async def post_staking_update():
 
     top_ticker = leaderboard[0]["ticker"].lower()
     img_path = _pick_meme(top_ticker)
+
+    if not _check_and_claim_post_slot("staking update tweet"):
+        return
 
     if DRY_RUN:
         logger.info(f"[DRY RUN] Staking tweet img={'yes' if img_path else 'no'}: {tweet_text[:100]}...")
