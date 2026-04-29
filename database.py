@@ -1079,6 +1079,14 @@ def recently_tweeted_about_token(ticker: str, window_hours: int = 2) -> bool:
         ).fetchone()
         if row:
             return True
+        row = conn.execute(
+            """SELECT 1 FROM qt_glazer_quotes
+               WHERE (LOWER(tweet_text) LIKE ? OR tweet_text LIKE ?)
+               AND created_at >= datetime('now', ?) LIMIT 1""",
+            (f"%{ticker_cashtag_lower}%", f"%{ticker_cashtag_upper}%", window)
+        ).fetchone()
+        if row:
+            return True
     return False
 
 

@@ -829,6 +829,11 @@ def poll_qt_glazer_list():
             logger.info(f"QT skip {tweet_id}: not ecosystem-relevant — {tweet_text[:60]}")
             continue
 
+        ticker = _extract_token(tweet_text)
+        if ticker and recently_tweeted_about_token(ticker):
+            logger.info(f"QT skip {tweet_id}: ${ticker.upper()} already covered recently")
+            continue
+
         candidates.append(tweet)
 
     if not candidates:
