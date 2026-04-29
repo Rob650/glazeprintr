@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-ENV DRY_RUN=true
+ENV DRY_RUN=false
 ENV PORT=8000
 
 EXPOSE 8000
