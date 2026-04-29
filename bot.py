@@ -251,8 +251,26 @@ def _get_tweet_token_data(tweet_text: str) -> dict | None:
 # ── Research pipeline ─────────────────────────────────────────────────────────
 
 _URL_RE_RESEARCH = re.compile(r'https?://[^\s<>"]+', re.IGNORECASE)
+_HANDLE_RE = re.compile(r'@([A-Za-z0-9_]{1,15})', re.IGNORECASE)
+_CASHTAG_RE = re.compile(r'\$([A-Za-z]{2,12})', re.IGNORECASE)
 _SKIP_DOMAINS_RESEARCH = frozenset(['twitter.com', 'x.com', 't.co', 'pic.twitter.com', 'pic.x.com'])
+_SKIP_HANDLES_RESEARCH = frozenset(['printrglazr'])  # don't research the bot itself
 _STAKING_KEYWORDS = frozenset(['stake', 'staking', 'pob', 'lock', 'locked', 'lockup', 'unstake', 'rewards', 'yield'])
+
+# Known Printr ecosystem Twitter handles with their descriptions.
+# These are injected immediately without any API call — no rate-limit cost.
+_KNOWN_ECOSYSTEM_HANDLES: dict[str, str] = {
+    "masterprintr":   "Official Printr team account — posts platform updates, launch announcements, and POB staking news",
+    "printr_money":   "Printr protocol account — publishes on-chain activity and ecosystem metrics",
+    "gamblronsolana": "GamblrOnSol — Printr ecosystem partner; runs pob.gamblr.money POB staking dashboard",
+    "gamblronsol":    "GamblrOnSol — Printr ecosystem partner; runs pob.gamblr.money POB staking dashboard",
+    "noobonprintr":   "Noob — Printr ecosystem community token project ($NOOB / $BRRR family)",
+    "marmotprintr":   "Marmot — Printr ecosystem community token project",
+    "ketprintr":      "$KET — Printr ecosystem token project",
+    "prinaboratory":  "Prinaboratory — Printr ecosystem project / community lab",
+    "stakrr":         "$STAKR — Printr ecosystem staking-focused token",
+    "fatchoiofficial": "$FATCHOI — Printr platform mascot token, highest ecosystem conviction play",
+}
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -286,6 +304,34 @@ class _HTMLTextExtractor(HTMLParser):
             self.title += stripped
         elif self._skip_depth == 0:
             self.text_parts.append(stripped)
+
+
+def _format_token_stats(data: dict) -> str:
+    """Format a token data dict into a compact stats string for prompt injection."""
+    name = (data.get("name") or "?").upper()
+    parts: list[str] = []
+    mc = data.get("market_cap") or 0
+    chg24 = data.get("price_change_24h")
+    vol = data.get("volume") or 0
+    buys = data.get("buys_24h") or 0
+    sells = data.get("sells_24h") or 0
+    staking_pct = data.get("staking_pct")
+    chain = data.get("chain") or ""
+    if mc:
+        parts.append(f"MC: {'${:.2f}M'.format(mc/1e6) if mc >= 1e6 else '${:,.0f}'.format(mc)}")
+    if chg24 is not None:
+        parts.append(f"24h: {chg24:+.1f}%")
+    if vol:
+        parts.append(f"Vol: {'${:.2f}M'.format(vol/1e6) if vol >= 1e6 else '${:,.0f}'.format(vol)}")
+    if buys and sells:
+        total = buys + sells
+        parts.append(f"Buys: {buys/total*100:.0f}% ({total:,} txns)")
+    if staking_pct is not None:
+        parts.append(f"Staked: {staking_pct:.1f}%")
+    if chain:
+        parts.append(f"Chain: {chain}")
+    stat_str = " | ".join(parts) if parts else "no data"
+    return f"${name}: {stat_str}"
 
 
 def _fetch_link_content(url: str, timeout: int = 5) -> str | None:
@@ -336,20 +382,24 @@ def _fetch_link_content(url: str, timeout: int = 5) -> str | None:
 
 
 def _research_tweet(tweet_text: str) -> str:
-    """Research a tweet before replying: fetch linked URLs and gather topic-specific on-chain data.
+    """Deep-research a tweet across 4 trigger types before generating a reply.
 
-    Cache behaviour:
-    - URL-level findings are cached for 7 days.  A cache hit skips the live fetch entirely.
-    - Domain-level findings (just title / site purpose) are cached for 14 days and are
-      injected as "PRIOR KNOWLEDGE" even when the specific URL was not seen before.
-    - Staking snapshots are cached for 1 day (data is volatile).
+    Trigger types (all feed into research_context for the AI prompt):
+      1. URLs       — fetch page content; cache 7d (url:), 14d domain title (domain:)
+      2. Handles    — @mentions: known ecosystem accounts get free labels; others get
+                      5 recent tweets fetched once per 24h (handle:)
+      3. Tickers    — $CASHTAG: ecosystem tokens from live scrape; unknown tokens via
+                      DexScreener; cache 1d (ticker:)
+      4. Contracts  — Solana/EVM addresses: DexScreener lookup; cache 1d (contract:)
 
     Returns a formatted research context string (empty string if nothing found).
     """
     parts: list[str] = []
     lower = tweet_text.lower()
 
-    # ── 1. URL research ───────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
+    # 1. URL research
+    # ─────────────────────────────────────────────────────────────────────────
     raw_urls = _URL_RE_RESEARCH.findall(tweet_text)
     urls = [u for u in raw_urls if not any(s in u.lower() for s in _SKIP_DOMAINS_RESEARCH)]
 
@@ -362,111 +412,178 @@ def _research_tweet(tweet_text: str) -> str:
         url_key = f"url:{url}"
         domain_key = f"domain:{domain}"
 
-        # Check URL-level cache first (7-day TTL)
         cached_content = get_research_finding(url_key, max_age_days=7)
         if cached_content:
             parts.append(f"LINK CONTENT [{domain}] (cached):\n{cached_content}")
             logger.debug(f"Research cache hit: {url_key}")
             continue
 
-        # Live fetch
         content = _fetch_link_content(url)
         if content:
             parts.append(f"LINK CONTENT [{domain}]:\n{content}")
-            # Persist URL-level finding
             try:
                 store_research_finding(url_key, content, key_type="url")
-            except Exception as e:
-                logger.debug(f"Failed to store research finding for {url_key}: {e}")
-            # Also persist a trimmed domain-level finding (first line = title) for future reuse
-            title_line = content.split("\n")[0]  # "Title: <title text>"
+            except Exception:
+                pass
+            title_line = content.split("\n")[0]
             if title_line:
                 try:
                     store_research_finding(domain_key, title_line, key_type="domain")
                 except Exception:
                     pass
         else:
-            # Fetch failed — check domain cache for prior knowledge (14-day TTL)
             cached_domain = get_research_finding(domain_key, max_age_days=14)
             if cached_domain:
                 parts.append(f"PRIOR KNOWLEDGE [{domain}]: {cached_domain}")
             elif domain:
                 parts.append(f"LINK DOMAIN (fetch failed — infer from name): {domain}")
 
-    # ── 2. Inject any prior domain knowledge for domains NOT fetched this call ─
-    # Covers cases where the tweet just mentions a known domain textually (no t.co wrapper)
+    # Inject ambient domain knowledge for domains mentioned textually (no URL wrapper)
     try:
         all_findings = get_all_research_findings(limit=20)
-        domain_findings = {f["key"][len("domain:"):]: f["content"]
-                          for f in all_findings if f["key_type"] == "domain"}
-        for domain, knowledge in domain_findings.items():
-            if domain and domain in lower and not any(domain in p for p in parts):
-                parts.append(f"PRIOR KNOWLEDGE [{domain}]: {knowledge}")
+        domain_cache = {f["key"][len("domain:"):]: f["content"]
+                        for f in all_findings if f["key_type"] == "domain"}
+        for dom, knowledge in domain_cache.items():
+            if dom and dom in lower and not any(dom in p for p in parts):
+                parts.append(f"PRIOR KNOWLEDGE [{dom}]: {knowledge}")
     except Exception:
         pass
 
-    # ── 3. Staking topic ──────────────────────────────────────────────────────
-    if any(kw in lower for kw in _STAKING_KEYWORDS) and _latest_projects:
-        staking_lines: list[str] = []
-        token_name = _extract_token(tweet_text)
+    # ─────────────────────────────────────────────────────────────────────────
+    # 2. Twitter handle research (@mentions)
+    # ─────────────────────────────────────────────────────────────────────────
+    raw_handles = [h for h in _HANDLE_RE.findall(tweet_text)
+                   if h.lower() not in _SKIP_HANDLES_RESEARCH]
+    # Deduplicate, preserve order
+    seen_handles: set[str] = set()
+    handles: list[str] = []
+    for h in raw_handles:
+        hl = h.lower()
+        if hl not in seen_handles:
+            seen_handles.add(hl)
+            handles.append(h)
 
-        if token_name:
-            staking_cache_key = f"topic:staking:{token_name.lower()}"
-            cached_staking = get_research_finding(staking_cache_key, max_age_days=1)
-            if cached_staking:
-                staking_lines.append(cached_staking)
+    for handle in handles[:3]:
+        handle_lower = handle.lower()
+        cache_key = f"handle:{handle_lower}"
+
+        # Known ecosystem account — free label, no API call
+        if handle_lower in _KNOWN_ECOSYSTEM_HANDLES:
+            desc = _KNOWN_ECOSYSTEM_HANDLES[handle_lower]
+            label = f"@{handle} [PRINTR ECOSYSTEM]: {desc}"
+            parts.append(f"HANDLE: {label}")
+            try:
+                store_research_finding(cache_key, label, key_type="handle")
+            except Exception:
+                pass
+            continue
+
+        # Check cache (24h TTL — avoids hammering Twitter API)
+        cached = get_research_finding(cache_key, max_age_days=1)
+        if cached:
+            parts.append(f"HANDLE (cached): {cached}")
+            continue
+
+        # Live lookup: grab 5 recent tweets for topic context
+        try:
+            tweets = fetch_user_tweets(handle, max_results=5)
+            if tweets:
+                snippets = [t["text"][:80].replace("\n", " ") for t in tweets[:3]]
+                summary = (f"@{handle} recent tweets: "
+                           + " | ".join(f'"{s}"' for s in snippets))
+                parts.append(f"HANDLE: {summary}")
+                try:
+                    store_research_finding(cache_key, summary, key_type="handle")
+                except Exception:
+                    pass
             else:
-                for proj in _latest_projects:
-                    if proj.get("name", "").lower() == token_name.lower():
-                        pct = proj.get("staking_pct")
-                        mc = proj.get("market_cap") or 0
-                        if pct is not None:
-                            mc_str = f"${mc/1e6:.2f}M" if mc >= 1e6 else f"${mc:,.0f}"
-                            line = f"${token_name.upper()} staking: {pct:.1f}% of supply locked (MC {mc_str})"
-                            staking_lines.append(line)
-                            try:
-                                store_research_finding(staking_cache_key, line, key_type="topic")
-                            except Exception:
-                                pass
-                        break
+                logger.debug(f"No tweets found for @{handle}")
+        except Exception as e:
+            logger.debug(f"Handle research failed for @{handle}: {e}")
 
-        # Top staked tokens from ecosystem
-        staked = [
-            (p["name"], p["staking_pct"])
-            for p in _latest_projects
-            if p.get("staking_pct") is not None
-        ]
-        staked.sort(key=lambda x: x[1], reverse=True)
+    # ─────────────────────────────────────────────────────────────────────────
+    # 3. Ticker research ($CASHTAG)
+    # ─────────────────────────────────────────────────────────────────────────
+    raw_cashtags = _CASHTAG_RE.findall(tweet_text)
+    seen_tickers: set[str] = set()
+    cashtags: list[str] = []
+    for t in raw_cashtags:
+        tl = t.lower()
+        if tl not in seen_tickers:
+            seen_tickers.add(tl)
+            cashtags.append(tl)
+
+    staking_mode = any(kw in lower for kw in _STAKING_KEYWORDS)
+
+    for ticker in cashtags[:3]:
+        # Ecosystem token in live scrape — always fresh, no cache needed
+        found_in_ecosystem = False
+        for proj in _latest_projects:
+            if proj.get("name", "").lower() == ticker:
+                stat_line = _format_token_stats(proj)
+                parts.append(f"TOKEN DATA: {stat_line}")
+                found_in_ecosystem = True
+                break
+
+        if found_in_ecosystem:
+            continue
+
+        # Unknown ticker — check research cache, then DexScreener
+        cache_key = f"ticker:{ticker}"
+        cached = get_research_finding(cache_key, max_age_days=1)
+        if cached:
+            parts.append(f"TOKEN DATA (cached): {cached}")
+            continue
+
+        try:
+            data = fetch_token_data_sync(ticker)
+            if data:
+                stat_line = _format_token_stats(data)
+                parts.append(f"TOKEN DATA: {stat_line}")
+                try:
+                    store_research_finding(cache_key, stat_line, key_type="ticker")
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"Ticker research failed for ${ticker}: {e}")
+
+    # Ecosystem staking overview (when staking keywords present)
+    if staking_mode and _latest_projects:
+        staked = sorted(
+            [(p["name"], p["staking_pct"]) for p in _latest_projects if p.get("staking_pct") is not None],
+            key=lambda x: x[1], reverse=True,
+        )
         if staked:
             top3 = [f"${n.upper()}: {pct:.0f}%" for n, pct in staked[:3]]
-            staking_lines.append(f"Top ecosystem staking conviction: {', '.join(top3)}")
+            parts.append(f"STAKING OVERVIEW: Top ecosystem conviction — {', '.join(top3)}")
 
-        if staking_lines:
-            parts.append("ON-CHAIN STAKING DATA:\n" + "\n".join(staking_lines))
+    # ─────────────────────────────────────────────────────────────────────────
+    # 4. Contract address research (Solana base58 / EVM 0x…)
+    # ─────────────────────────────────────────────────────────────────────────
+    raw_contracts = list(dict.fromkeys(_CONTRACT_RE.findall(tweet_text)))
 
-    # ── 4. Live token stats (non-staking context) ─────────────────────────────
-    token_name = _extract_token(tweet_text)
-    if token_name and not any(kw in lower for kw in _STAKING_KEYWORDS):
-        for proj in _latest_projects:
-            if proj.get("name", "").lower() == token_name.lower():
-                lines = []
-                chg = proj.get("price_change_24h")
-                vol = proj.get("volume")
-                mc = proj.get("market_cap")
-                buys = proj.get("buys_24h")
-                sells = proj.get("sells_24h")
-                if mc:
-                    lines.append(f"MC: {'${:.2f}M'.format(mc/1e6) if mc >= 1e6 else '${:,.0f}'.format(mc)}")
-                if chg is not None:
-                    lines.append(f"24h: {chg:+.1f}%")
-                if vol:
-                    lines.append(f"Vol: {'${:.2f}M'.format(vol/1e6) if vol >= 1e6 else '${:,.0f}'.format(vol)}")
-                if buys and sells:
-                    total = buys + sells
-                    lines.append(f"Buy pressure: {buys/total*100:.0f}% ({total} txns)")
-                if lines:
-                    parts.append(f"LIVE ${token_name.upper()} DATA: {' | '.join(lines)}")
-                break
+    for contract in raw_contracts[:2]:
+        cache_key = f"contract:{contract}"
+
+        cached = get_research_finding(cache_key, max_age_days=1)
+        if cached:
+            parts.append(f"CONTRACT DATA (cached): {cached}")
+            continue
+
+        try:
+            data = fetch_token_data_sync(contract)
+            if data:
+                stat_line = _format_token_stats(data)
+                entry = f"Contract {contract[:8]}…: {stat_line}"
+                parts.append(f"CONTRACT DATA: {entry}")
+                try:
+                    store_research_finding(cache_key, entry, key_type="contract")
+                except Exception:
+                    pass
+            else:
+                logger.debug(f"No token data for contract {contract[:8]}")
+        except Exception as e:
+            logger.debug(f"Contract research failed for {contract[:8]}: {e}")
 
     return "\n\n".join(parts)
 
