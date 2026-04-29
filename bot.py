@@ -96,12 +96,21 @@ _post_rate_lock = threading.Lock()
 def _check_and_claim_post_slot(caller: str = "") -> bool:
     """Thread-safe 30-min rate limit check + atomic claim.
 
+    Reads/writes last_post_time from the DB so the cooldown survives redeploys.
     Returns True if posting is allowed (and pre-claims the slot so no concurrent
     job can also claim it). Returns False if still within the cooldown window.
     """
     global _last_any_post_time
     with _post_rate_lock:
         now = datetime.now(timezone.utc)
+        # Bootstrap from DB on first call after startup.
+        if _last_any_post_time is None:
+            stored = database.get_state("last_post_time")
+            if stored:
+                try:
+                    _last_any_post_time = datetime.fromisoformat(stored)
+                except ValueError:
+                    pass
         if _last_any_post_time is not None:
             elapsed = (now - _last_any_post_time).total_seconds() / 60
             if elapsed < _MIN_POST_INTERVAL_MINUTES:
@@ -112,6 +121,7 @@ def _check_and_claim_post_slot(caller: str = "") -> bool:
                 return False
         # Pre-claim the slot to prevent any concurrent job from also firing.
         _last_any_post_time = now
+        database.set_state("last_post_time", now.isoformat())
         return True
 
 _list_poll_since_id: str | None = None  # loaded from DB on first call; List API doesn't support since_id natively

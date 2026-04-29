@@ -220,6 +220,7 @@ def init_db():
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('recent_tickers', '[]');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('recent_openers', '');
             INSERT OR IGNORE INTO bot_state (key, value) VALUES ('recent_topics', '[]');
+            INSERT OR IGNORE INTO bot_state (key, value) VALUES ('last_post_time', '');
 
             CREATE INDEX IF NOT EXISTS idx_replied_created ON replied_tweets(created_at);
             CREATE INDEX IF NOT EXISTS idx_glaze_created ON glaze_scores(created_at);
