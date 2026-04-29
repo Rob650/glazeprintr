@@ -147,11 +147,28 @@ def _has_launch_intent(text: str) -> bool:
     lower = text.lower()
     return any(kw in lower for kw in _LAUNCH_KEYWORDS)
 
-ECOSYSTEM_TOKENS = [
+# Seed ecosystem token list — used as fallback before the first discovery scan runs.
+# After startup, _get_ecosystem_token_list() returns the full dynamic set from DB.
+_ECOSYSTEM_TOKENS_SEED = [
     "belief", "ooo", "rotus", "fatchoi", "deployr", "patapim",
     "roi", "print", "cmyk", "pve", "fsjal",
     "brrr", "quack", "lfp", "stakr", "pob500",
 ]
+
+# Back-compat alias: some code still references ECOSYSTEM_TOKENS directly.
+ECOSYSTEM_TOKENS = _ECOSYSTEM_TOKENS_SEED
+
+
+def _get_ecosystem_token_list() -> list[str]:
+    """Return current ecosystem ticker list: DB-discovered tokens + seed fallback."""
+    try:
+        from token_discovery import get_all_ecosystem_tickers
+        tickers = get_all_ecosystem_tickers()
+        if tickers:
+            return tickers
+    except Exception:
+        pass
+    return _ECOSYSTEM_TOKENS_SEED
 
 _latest_projects: list[dict] = []
 _latest_dune_context: str = ""
@@ -216,7 +233,7 @@ def _is_qt_glazer_relevant(text: str) -> bool:
 
 def _extract_token(text: str, extra: str = "") -> str:
     combined = (text + " " + extra).lower()
-    for tok in ECOSYSTEM_TOKENS:
+    for tok in _get_ecosystem_token_list():
         if f"${tok}" in combined:
             return tok
     m = re.search(r"\$([a-zA-Z]{2,12})", combined)

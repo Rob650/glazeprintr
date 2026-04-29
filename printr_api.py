@@ -251,6 +251,76 @@ def _post_api_public(path: str, payload: dict, timeout: int = 20) -> Optional[di
     return None
 
 
+def _get_api_public(path: str, timeout: int = 20) -> Optional[dict]:
+    """GET a Printr API endpoint that requires no auth. Returns parsed JSON or None."""
+    req = urllib.request.Request(
+        f"{_PRINTR_API_BASE}{path}",
+        headers={
+            "User-Agent": _REQ_UA,
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        logger.debug(f"Printr API (GET public) {path}: HTTP {e.code}")
+    except Exception as e:
+        logger.debug(f"Printr API (GET public) {path}: {e}")
+    return None
+
+
+def fetch_token_list_sync() -> list[dict]:
+    """
+    Try multiple Printr API endpoints to get a full token listing.
+    Returns a list of raw token dicts (may have ticker, symbol, mint, address, etc.).
+    Falls back to empty list if all endpoints fail — caller uses staking positions as backup.
+    """
+    # Candidate endpoints in priority order (GET then POST variants)
+    candidates: list[tuple[str, str, Optional[dict]]] = [
+        ("GET",  "/telecoin/list",            None),
+        ("POST", "/telecoin/list",            {}),
+        ("GET",  "/telecoin",                 None),
+        ("GET",  "/tokens",                   None),
+        ("POST", "/tokens/list",              {}),
+        ("GET",  "/marketplace",              None),
+        ("POST", "/marketplace/list",         {}),
+        ("GET",  "/launchpad/tokens",         None),
+        ("POST", "/launchpad/list",           {}),
+    ]
+
+    for method, path, payload in candidates:
+        try:
+            if method == "GET":
+                data = _get_api_public(path)
+            else:
+                data = _post_api_public(path, payload or {})
+
+            if not data:
+                continue
+
+            # Normalise: the response may be a list or a wrapper dict
+            tokens: list[dict] = []
+            if isinstance(data, list):
+                tokens = data
+            elif isinstance(data, dict):
+                for key in ("tokens", "telecoins", "items", "data", "results", "list"):
+                    if isinstance(data.get(key), list):
+                        tokens = data[key]
+                        break
+
+            if tokens:
+                logger.info(f"Printr API token list: {len(tokens)} tokens from {method} {path}")
+                return tokens
+
+        except Exception as e:
+            logger.debug(f"Printr token list {method} {path}: {e}")
+
+    logger.info("Printr API: no token list endpoint available — relying on staking positions + KNOWN_CONTRACTS")
+    return []
+
+
 def fetch_buyback_burns(mint_address: str) -> list[dict]:
     """POST /v1/telecoin/buyback-burn-detail — returns burn tx history for a token (no auth)."""
     data = _post_api_public("/telecoin/buyback-burn-detail", {"mint_address": mint_address})
