@@ -251,26 +251,37 @@ _ECOSYSTEM_GLAZE_NOTE = (
 
 _MEMES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memes")
 _MEME_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+# Tracks the last meme path used per ticker so we don't repeat back-to-back.
+_last_meme_used: dict[str, str] = {}
 
 
 def _pick_meme(ticker: str | None) -> str | None:
-    """Return a random meme image path for ticker, or None if no images exist."""
+    """Return a random meme image path for ticker, avoiding the last-used image.
+
+    If the ticker folder has 2+ images the previously picked one is excluded from
+    the draw.  Falls back to a fully-random pick when only 1 image exists.
+    """
     if not ticker:
         return None
-    ticker_dir = os.path.join(_MEMES_DIR, ticker.lower())
+    key = ticker.lower()
+    ticker_dir = os.path.join(_MEMES_DIR, key)
     if not os.path.isdir(ticker_dir):
         logging.getLogger(__name__).warning(f"_pick_meme: no directory for ticker={ticker!r} at {ticker_dir!r} (memes_dir={_MEMES_DIR!r})")
         return None
-    candidates = [
+    candidates = sorted([
         os.path.join(ticker_dir, f)
         for f in os.listdir(ticker_dir)
         if os.path.splitext(f)[1].lower() in _MEME_EXTS
-    ]
+    ])
     if not candidates:
         logging.getLogger(__name__).warning(f"_pick_meme: directory exists for {ticker!r} but no image files found")
         return None
-    chosen = random.choice(candidates)
-    logging.getLogger(__name__).info(f"_pick_meme: picked {chosen!r} for ticker={ticker!r} ({len(candidates)} candidates)")
+    # Exclude the last-used image when the pool is large enough.
+    last = _last_meme_used.get(key)
+    pool = [c for c in candidates if c != last] if last and len(candidates) > 1 else candidates
+    chosen = random.choice(pool)
+    _last_meme_used[key] = chosen
+    logging.getLogger(__name__).info(f"_pick_meme: picked {chosen!r} for ticker={ticker!r} ({len(candidates)} candidates, {len(pool)} in pool)")
     return chosen
 
 
