@@ -1360,3 +1360,123 @@ def get_price_context_for_all(projects: list[dict]) -> str:
         "  Match your language to the PHASE shown for each token."
     )
     return header + "\n" + "\n".join(sections)
+
+
+def get_volume_sentiment(token_data: dict) -> dict:
+    """
+    Combine transaction count ratio (breadth) with dollar volume (depth) to
+    classify market sentiment for a token.
+
+    Returns a dict with:
+      label         — one of: "whale_accumulation" | "retail_accumulation" |
+                               "heavy_conviction_buying" | "smart_money_exiting" |
+                               "retail_distribution" | "low_activity" | "neutral"
+      narrative     — short human-readable interpretation string (for prompt injection)
+      buy_ratio     — fraction of buys out of total txns (24h), or None
+      vol_mc_ratio  — volume / market_cap (24h), or None
+      avg_tx_size   — avg dollar size per transaction (24h), or None
+      conviction    — "high" | "medium" | "low" based on vol/MC
+      breadth       — "buy_dominant" | "sell_dominant" | "balanced" based on tx ratio
+    """
+    mc = token_data.get("market_cap") or 0
+    vol24 = token_data.get("volume") or 0
+    buys24 = token_data.get("buys_24h") or 0
+    sells24 = token_data.get("sells_24h") or 0
+    total_txns = buys24 + sells24
+
+    result: dict = {
+        "label": "low_activity",
+        "narrative": "",
+        "buy_ratio": None,
+        "vol_mc_ratio": None,
+        "avg_tx_size": None,
+        "conviction": "low",
+        "breadth": "balanced",
+    }
+
+    if total_txns == 0 and vol24 == 0:
+        result["narrative"] = "no activity data"
+        return result
+
+    # ── Transaction breadth ───────────────────────────────────────────────────
+    buy_ratio: float | None = None
+    if total_txns > 0:
+        buy_ratio = buys24 / total_txns
+        result["buy_ratio"] = buy_ratio
+        if buy_ratio >= 0.60:
+            result["breadth"] = "buy_dominant"
+        elif buy_ratio <= 0.40:
+            result["breadth"] = "sell_dominant"
+        else:
+            result["breadth"] = "balanced"
+
+    # ── Dollar volume conviction ──────────────────────────────────────────────
+    vol_mc_ratio: float | None = None
+    if mc > 0 and vol24 > 0:
+        vol_mc_ratio = vol24 / mc
+        result["vol_mc_ratio"] = vol_mc_ratio
+        # High conviction: vol > 20% of MC in 24h; medium: 5–20%; low: <5%
+        if vol_mc_ratio >= 0.20:
+            result["conviction"] = "high"
+        elif vol_mc_ratio >= 0.05:
+            result["conviction"] = "medium"
+        else:
+            result["conviction"] = "low"
+
+    # ── Average transaction size ──────────────────────────────────────────────
+    avg_tx_size: float | None = None
+    if total_txns > 0 and vol24 > 0:
+        avg_tx_size = vol24 / total_txns
+        result["avg_tx_size"] = avg_tx_size
+
+    # ── Sentiment classification ──────────────────────────────────────────────
+    breadth = result["breadth"]
+    conviction = result["conviction"]
+
+    if breadth == "buy_dominant" and conviction == "high":
+        label = "heavy_conviction_buying"
+    elif breadth == "buy_dominant" and conviction == "medium":
+        # Check if avg tx size suggests whales vs retail
+        if avg_tx_size and avg_tx_size >= 500:
+            label = "whale_accumulation"
+        else:
+            label = "retail_accumulation"
+    elif breadth == "buy_dominant" and conviction == "low":
+        label = "retail_accumulation"
+    elif breadth == "sell_dominant" and conviction in ("high", "medium"):
+        label = "smart_money_exiting"
+    elif breadth == "sell_dominant" and conviction == "low":
+        label = "retail_distribution"
+    elif conviction == "high":
+        label = "high_volume_neutral"
+    else:
+        label = "neutral"
+
+    result["label"] = label
+
+    # ── Narrative string for prompt injection ─────────────────────────────────
+    buy_pct_str = f"{buy_ratio*100:.0f}% buys" if buy_ratio is not None else "unknown buy ratio"
+    vol_str = f"${vol24/1e6:.2f}M vol" if vol24 >= 1e6 else f"${vol24:,.0f} vol"
+    mc_str = f"${mc/1e6:.2f}M MC" if mc >= 1e6 else f"${mc:,.0f} MC"
+    txn_str = f"{total_txns:,} txns" if total_txns > 0 else "no txns"
+    avg_str = f"~${avg_tx_size:,.0f}/tx" if avg_tx_size else ""
+
+    label_phrases = {
+        "heavy_conviction_buying":  "heavy conviction buying — big money + one-sided txns",
+        "whale_accumulation":       "whale accumulation — few large txns, buy-dominant",
+        "retail_accumulation":      "retail accumulation — many small buys, no whale size yet",
+        "smart_money_exiting":      "smart money exiting — high volume, sell-dominant",
+        "retail_distribution":      "retail distribution — small sells dominating",
+        "high_volume_neutral":      "high-volume churn — conviction unclear, watch direction",
+        "neutral":                  "neutral activity",
+        "low_activity":             "low activity",
+    }
+    phrase = label_phrases.get(label, label)
+
+    parts = [f"{txn_str} ({buy_pct_str})", f"{vol_str} on {mc_str}"]
+    if avg_str:
+        parts.append(avg_str)
+    parts.append(f"→ {phrase}")
+
+    result["narrative"] = " | ".join(parts)
+    return result

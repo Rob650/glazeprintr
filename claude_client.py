@@ -20,6 +20,7 @@ from patterns import (
     get_ecosystem_momentum_context, get_flywheel_context,
     get_pattern_context, get_reply_pattern_context, get_qt_pattern_context,
 )
+from intelligence import get_volume_sentiment
 
 # Strips/replaces URLs Claude sneaks in despite prompt instructions (twitter.com/x.com are preserved)
 _HTTPS_RE = re.compile(r'https?://(?!(?:www\.)?(?:twitter\.com|x\.com)/)\S+', re.IGNORECASE)
@@ -371,7 +372,11 @@ When data is provided, your tweet MUST contain:
 
 DATA HIERARCHY — pick the most compelling angle from what's available:
 - Short-term momentum: 1h/5m price changes + recent txn counts = "something is happening RIGHT NOW"
-- Buy/sell ratio: >60% buys = "accumulation", >70% = "one-sided buying pressure", <40% buys = "paper hands exiting"
+- Volume sentiment (ALWAYS pair these two — never cite one without the other):
+    • TX buy/sell ratio = BREADTH (how many wallets are in) — >60% buys = "accumulation", >70% = "one-sided buying pressure", <40% = "paper hands exiting"
+    • Dollar volume vs MC = DEPTH (how much conviction) — vol/MC >20% = "real size", 5–20% = "building", <5% = "small fish"
+    • Together they tell the real story: high buys + high vol = heavy conviction; high buys + low vol = retail nibbling, no whales yet; low buys + high vol = smart money exiting; few buys + low vol = dead
+    • When "Volume sentiment" is shown in token data, USE it — it already classifies the signal for you
 - Staking % + MC combo: high staking + low MC = "compressed spring", high staking + high MC = "conviction at scale"
 - Volume spikes: compare 1h vol to 24h average — if disproportionate, that's breaking news
 - Token age + metrics: new token (<7d) + fast growth = "X days old and already at $Y MC"
@@ -390,7 +395,8 @@ SPECIFIC DATA RULES:
 - Tokens with Creator Fees instead of POB Staking have NO staking % — never invent one
 - If no data for a token: skip stats entirely. Don't imply knowledge.
 - When you have ecosystem comparative data, USE IT for relative framing
-- Buy/sell ratios and txn counts are GOLD — most bots don't have this. Lead with it when it tells a story.
+- Buy/sell ratio + dollar volume are GOLD together — breadth tells you how many wallets are in, depth tells you how much size. Never cite one without the other when both are available.
+- "Volume sentiment" in the token data block is a pre-classified signal — use it directly ("whale accumulation", "retail nibbling", "smart money exiting")
 - On-chain analytics from Dune: reference holder growth, unique wallets, transaction patterns when provided
 
 GLAZE VOCABULARY (mandatory — this IS your voice):
@@ -551,8 +557,11 @@ CRITICAL: Read the tweet. Respond to what they're actually saying.
 If token data is provided, build your reply around the most compelling metric:
 - Price pumping? Lead with the % change and txn count — "up X% on Y txns, Z% buys — ser this is accumulation not a fluke"
 - High staking? Lead with conviction — "X% staked at $Y MC — compressed spring certified"
-- Volume spike? — "doing $X vol on a $Y MC — the ratio is speaking"
-- Buy pressure? — "Z% buys in the last hour, the chart doesn't lie ser"
+- Volume + buy pressure (always pair these for the full picture):
+    • "X buys vs Y sells on $Z vol — distribution growing WITH size behind it"
+    • "68% buys but tiny vol on $12M MC — retail nibbling, whales not here yet"
+    • Volume sentiment label if shown: use it directly ("whale accumulation", "heavy conviction buying", etc.)
+- Buy pressure alone — "Z% buys in the last hour, the chart doesn't lie ser"
 
 Rules:
 - RESPOND TO WHAT THEY SAID + weave in real data that supports your glaze
@@ -700,7 +709,10 @@ When the token is young (< 14 days) and already outperforming older tokens:
 STATS ARE MANDATORY when data is available. Pick the most alarming combo:
 - MC + price change: "$2.3M MC, up 47% in 24h — certified glaze"
 - Staking + conviction: "74% staked at $2.3M MC — circulating supply is a formality"
-- Volume + buy pressure: "$180K vol, 68% buys — accumulation isn't a theory, it's the data"
+- Volume + buy pressure (ALWAYS use both together — depth + breadth):
+    • "$950K vol on $5.9M MC, 2,825 buys vs 1,832 sells — distribution expanding with real size behind it"
+    • "1,400 txns, 68% buys but only $56K vol on $12M MC — small fish nibbling, no conviction yet"
+    • "high volume, sell-dominant — smart money rotating out, watch your bags"
 - Txn activity: "1,400 txns in 24h, buy/sell ratio 2.3:1 — one-sided"
 - Token age + growth: "4 days old, $450K MC — Printr launches different"
 - Ecosystem rank: "#1 mover today, outpacing ecosystem avg of -12% by 83pp"
@@ -943,6 +955,11 @@ def _format_token_data_block(token_data: dict) -> str:
             buy_pct = buys / txns * 100 if txns > 0 else 0
             ratio_str = f"{buys/sells:.1f}:1 buy/sell" if sells > 0 else "ALL buys"
             lines.append(f"  {period} txns: {txns:,} ({buys} buys / {sells} sells — {buy_pct:.0f}% buys, {ratio_str})")
+
+    # Volume sentiment — combines tx breadth (buy/sell ratio) with dollar depth (vol/MC)
+    vs = get_volume_sentiment(token_data)
+    if vs.get("narrative") and vs["label"] not in ("low_activity", "neutral"):
+        lines.append(f"  Volume sentiment: {vs['narrative']}")
 
     staking = token_data.get("staking_pct")
     if staking is not None:
