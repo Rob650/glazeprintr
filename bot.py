@@ -1190,14 +1190,14 @@ def _find_thread_mover(intel) -> dict | None:
     return None
 
 
-async def scan_and_stake():
-    """Scan bot wallet, compute glaze tiers (staked + unstaked), auto-stake. Runs every 15 min."""
+async def scan_wallet():
+    """Scan bot wallet (receive-only), compute glaze tiers from holdings. Runs every 15 min."""
     if not ENABLE_WALLET_GLAZING:
         return
     try:
-        await wallet_scanner.scan_and_stake()
+        await wallet_scanner.scan_wallet()
     except Exception as e:
-        logger.error(f"scan_and_stake error: {e}")
+        logger.error(f"scan_wallet error: {e}")
 
 
 async def post_original_tweet():

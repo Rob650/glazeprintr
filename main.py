@@ -125,7 +125,7 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(_wallet_refresh_job, "interval", hours=6, id="wallet_profiler", replace_existing=True,
                           max_instances=1, coalesce=True, misfire_grace_time=300, next_run_time=_now)
     if ENABLE_WALLET_GLAZING:
-        scheduler.add_job(bot.scan_and_stake, "interval", minutes=15, id="wallet_glazer", replace_existing=True,
+        scheduler.add_job(bot.scan_wallet, "interval", minutes=15, id="wallet_glazer", replace_existing=True,
                           max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.start()
     launch_detection_status = "launch detection (10 min)" if ENABLE_LAUNCH_DETECTION else "launch detection DISABLED"
