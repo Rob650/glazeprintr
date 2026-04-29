@@ -29,7 +29,7 @@ from database import (
     get_untweeted_burns, mark_burn_tweeted, count_burn_tweets_last_hour,
     recently_tweeted_about_token,
     get_glaze_queue, update_last_glazed,
-    get_recent_tickers, get_wallet_holdings,
+    get_recent_tickers, add_recent_ticker, get_wallet_holdings,
 )
 import launch_detector
 import wallet_scanner
@@ -1310,14 +1310,17 @@ def _select_topic_bucket(projects: list[dict]) -> tuple[str, str | None, str]:
     if bucket == "wallet_weighted" and has_wallet:
         total_usd = sum((h.get("usd_value") or 0) for h in wallet_holdings)
         available = [h for h in wallet_holdings if _ticker_ok(h["ticker"])]
-        pool = available if available else wallet_holdings
-        usd_weights = [(h.get("usd_value") or 0.01) for h in pool]
-        [chosen] = random.choices(pool, weights=usd_weights, k=1)
-        t = chosen["ticker"].lower()
-        pct = (chosen.get("usd_value") or 0) / total_usd * 100 if total_usd > 0 else 0
-        ctx = f"Represents {pct:.0f}% of bot wallet holdings by USD value."
-        logger.info(f"_select_topic_bucket: wallet_weighted → ${t.upper()} ({pct:.0f}% of wallet)")
-        return "wallet_weighted", t, ctx
+        if available:
+            usd_weights = [(h.get("usd_value") or 0.01) for h in available]
+            [chosen] = random.choices(available, weights=usd_weights, k=1)
+            t = chosen["ticker"].lower()
+            pct = (chosen.get("usd_value") or 0) / total_usd * 100 if total_usd > 0 else 0
+            ctx = f"Represents {pct:.0f}% of bot wallet holdings by USD value."
+            logger.info(f"_select_topic_bucket: wallet_weighted → ${t.upper()} ({pct:.0f}% of wallet)")
+            return "wallet_weighted", t, ctx
+        else:
+            logger.info("_select_topic_bucket: wallet_weighted — all on cooldown, falling through to ecosystem_stats")
+            bucket = "ecosystem_stats"
 
     # ── Bucket 2: Top movers/gainers ───────────────────────────────────────────
     if bucket == "top_mover":
@@ -1334,10 +1337,9 @@ def _select_topic_bucket(projects: list[dict]) -> tuple[str, str | None, str]:
                 ctx = f"Top gainer — 1h: {chg1h:+.1f}%, 24h: {chg24h:+.1f}%."
                 logger.info(f"_select_topic_bucket: top_mover → ${t.upper()} (1h:{chg1h:+.1f}%)")
                 return "top_mover", t, ctx
-        if movers:
-            t = (movers[0].get("name") or "").lower()
-            logger.info(f"_select_topic_bucket: top_mover → ${t.upper()} (all on cooldown, picking best)")
-            return "top_mover", t, "Top gainer (all options on cooldown)."
+        # All top movers on cooldown — fall through instead of repeating the same ticker
+        logger.info("_select_topic_bucket: top_mover — all on cooldown, falling through to ecosystem_stats")
+        bucket = "ecosystem_stats"
 
     # ── Bucket 3: Top market cap ───────────────────────────────────────────────
     if bucket == "top_mc":
@@ -1354,10 +1356,9 @@ def _select_topic_bucket(projects: list[dict]) -> tuple[str, str | None, str]:
                 ctx = f"Top token by ecosystem market cap ({mc_str})."
                 logger.info(f"_select_topic_bucket: top_mc → ${t.upper()} (MC={mc_str})")
                 return "top_mc", t, ctx
-        if top_mc_projects:
-            t = (top_mc_projects[0].get("name") or "").lower()
-            logger.info(f"_select_topic_bucket: top_mc → ${t.upper()} (all on cooldown, picking #1)")
-            return "top_mc", t, "Top by market cap (all options on cooldown)."
+        # All top-MC tokens on cooldown — fall through instead of repeating the same ticker
+        logger.info("_select_topic_bucket: top_mc — all on cooldown, falling through to ecosystem_stats")
+        bucket = "ecosystem_stats"
 
     # ── Bucket 4: Ecosystem stats ──────────────────────────────────────────────
     if bucket == "ecosystem_stats":
@@ -1549,6 +1550,8 @@ async def post_original_tweet():
             if paid_glaze_ticker:
                 update_last_glazed(paid_glaze_ticker)
             _last_original_tweet_ticker = effective_ticker
+            if effective_ticker:
+                add_recent_ticker(effective_ticker)
         else:
             posted_hour = datetime.now(timezone.utc).hour
             tweet_id = post_tweet(tweet_text, media_path=img_path)
@@ -1562,6 +1565,8 @@ async def post_original_tweet():
                 if paid_glaze_ticker:
                     update_last_glazed(paid_glaze_ticker)
                 _last_original_tweet_ticker = effective_ticker
+                if effective_ticker:
+                    add_recent_ticker(effective_ticker)
             else:
                 logger.warning("Failed to post original tweet")
     except Exception as e:
