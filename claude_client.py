@@ -372,11 +372,17 @@ When data is provided, your tweet MUST contain:
 
 DATA HIERARCHY — pick the most compelling angle from what's available:
 - Short-term momentum: 1h/5m price changes + recent txn counts = "something is happening RIGHT NOW"
-- Volume sentiment (ALWAYS pair these two — never cite one without the other):
-    • TX buy/sell ratio = BREADTH (how many wallets are in) — >60% buys = "accumulation", >70% = "one-sided buying pressure", <40% = "paper hands exiting"
-    • Dollar volume vs MC = DEPTH (how much conviction) — vol/MC >20% = "real size", 5–20% = "building", <5% = "small fish"
-    • Together they tell the real story: high buys + high vol = heavy conviction; high buys + low vol = retail nibbling, no whales yet; low buys + high vol = smart money exiting; few buys + low vol = dead
-    • When "Volume sentiment" is shown in token data, USE it — it already classifies the signal for you
+- Volume sentiment — THREE layers, always read together:
+    • TX count ratio = BREADTH (how many wallets) — >60% buy txns = wide accumulation, <40% = distribution spreading
+    • Dollar volume split = DIRECTION (where the MONEY flows) — buy vol % tells you if buyers or sellers are bigger per trade
+    • Vol/MC ratio = DEPTH (how much conviction behind it) — vol/MC >20% = serious size, 5–20% = building, <5% = small fish
+    • The signal combos:
+      - High buy txns + high buy vol % + high vol/MC = heavy conviction buying — full alignment
+      - High buy txns + low vol/MC = retail nibbling — many wallets, no size behind it
+      - Low buy txns + high buy vol % = BULLISH DIVERGENCE — whale(s) accumulating while retail sells
+      - High buy txns + low/equal buy vol % = BEARISH DIVERGENCE — lots of small buyers, but dollar flow is sell-side (whales distributing)
+      - High sell txns + high sell vol % + high vol/MC = smart money exiting — believe it
+    • When "BEARISH DIVERGENCE" or "BULLISH DIVERGENCE" appears in token data, THIS IS THE HEADLINE — lead with it
 - Staking % + MC combo: high staking + low MC = "compressed spring", high staking + high MC = "conviction at scale"
 - Volume spikes: compare 1h vol to 24h average — if disproportionate, that's breaking news
 - Token age + metrics: new token (<7d) + fast growth = "X days old and already at $Y MC"
@@ -395,8 +401,10 @@ SPECIFIC DATA RULES:
 - Tokens with Creator Fees instead of POB Staking have NO staking % — never invent one
 - If no data for a token: skip stats entirely. Don't imply knowledge.
 - When you have ecosystem comparative data, USE IT for relative framing
-- Buy/sell ratio + dollar volume are GOLD together — breadth tells you how many wallets are in, depth tells you how much size. Never cite one without the other when both are available.
-- "Volume sentiment" in the token data block is a pre-classified signal — use it directly ("whale accumulation", "retail nibbling", "smart money exiting")
+- TX ratio + dollar vol split + vol/MC are GOLD together — breadth (how many), direction (which $ side), depth (how much). Never cite just one.
+- "$ vol split" in the token data block shows real buy/sell dollar flow — this overrides count ratio when they disagree
+- "BEARISH DIVERGENCE" or "BULLISH DIVERGENCE" in the token data block = headline event. Lead with it. Explain it. Most CT misses this.
+- "Volume sentiment" pre-classifies the signal — use the label directly in your framing
 - On-chain analytics from Dune: reference holder growth, unique wallets, transaction patterns when provided
 
 GLAZE VOCABULARY (mandatory — this IS your voice):
@@ -557,10 +565,12 @@ CRITICAL: Read the tweet. Respond to what they're actually saying.
 If token data is provided, build your reply around the most compelling metric:
 - Price pumping? Lead with the % change and txn count — "up X% on Y txns, Z% buys — ser this is accumulation not a fluke"
 - High staking? Lead with conviction — "X% staked at $Y MC — compressed spring certified"
-- Volume + buy pressure (always pair these for the full picture):
-    • "X buys vs Y sells on $Z vol — distribution growing WITH size behind it"
-    • "68% buys but tiny vol on $12M MC — retail nibbling, whales not here yet"
-    • Volume sentiment label if shown: use it directly ("whale accumulation", "heavy conviction buying", etc.)
+- Volume (always combine all three layers):
+    • TX count ratio = breadth; $ vol split = direction; vol/MC = depth
+    • "2,825 buys vs 1,832 sells AND 71% of the dollar volume is buying on $950K vol — ser this is full conviction not just retail noise"
+    • "68% buy txns but vol is only $56K on a $12M MC — lots of wallets, no whale size yet, be patient"
+    • DIVERGENCE (lead with this when flagged): "68% buy txns but sellers are moving more dollars — that's retail buying into distribution ser, not accumulation"
+    • Volume sentiment label if shown: lead with it ("heavy conviction buying", "bullish divergence", "whale accumulation", etc.)
 - Buy pressure alone — "Z% buys in the last hour, the chart doesn't lie ser"
 
 Rules:
@@ -709,10 +719,12 @@ When the token is young (< 14 days) and already outperforming older tokens:
 STATS ARE MANDATORY when data is available. Pick the most alarming combo:
 - MC + price change: "$2.3M MC, up 47% in 24h — certified glaze"
 - Staking + conviction: "74% staked at $2.3M MC — circulating supply is a formality"
-- Volume + buy pressure (ALWAYS use both together — depth + breadth):
-    • "$950K vol on $5.9M MC, 2,825 buys vs 1,832 sells — distribution expanding with real size behind it"
-    • "1,400 txns, 68% buys but only $56K vol on $12M MC — small fish nibbling, no conviction yet"
-    • "high volume, sell-dominant — smart money rotating out, watch your bags"
+- Volume + buy pressure (always use all three: breadth + direction + depth):
+    • Full conviction: "2,825 buys vs 1,832 sells, 71% of dollar volume is buying on $950K vol ($5.9M MC) — full alignment, this is real"
+    • Retail only: "68% buy txns but $56K vol on $12M MC — many wallets, no size, small fish nibbling"
+    • BEARISH DIVERGENCE: "68% of txns are buys but 60% of dollar volume is sells — retail buying into whale distribution, watch the bag"
+    • BULLISH DIVERGENCE: "62% sell txns but 70% of dollar volume is buying — smart money accumulating while retail shakes out"
+    • Smart money exit: "high vol, sell-dominant txns AND sell-dominant dollar flow — someone is leaving, follow the money"
 - Txn activity: "1,400 txns in 24h, buy/sell ratio 2.3:1 — one-sided"
 - Token age + growth: "4 days old, $450K MC — Printr launches different"
 - Ecosystem rank: "#1 mover today, outpacing ecosystem avg of -12% by 83pp"
@@ -946,7 +958,7 @@ def _format_token_data_block(token_data: dict) -> str:
     if liq:
         lines.append(f"  Liquidity: ${liq/1e6:.2f}M" if liq >= 1e6 else f"  Liquidity: ${liq:,.0f}")
 
-    # Transaction data — buy/sell ratio is pure alpha
+    # Transaction counts + buy/sell dollar volume split (when available)
     for period in ["24h", "6h", "1h", "5m"]:
         txns = token_data.get(f"txns_{period}")
         buys = token_data.get(f"buys_{period}", 0)
@@ -955,10 +967,22 @@ def _format_token_data_block(token_data: dict) -> str:
             buy_pct = buys / txns * 100 if txns > 0 else 0
             ratio_str = f"{buys/sells:.1f}:1 buy/sell" if sells > 0 else "ALL buys"
             lines.append(f"  {period} txns: {txns:,} ({buys} buys / {sells} sells — {buy_pct:.0f}% buys, {ratio_str})")
+            # Buy/sell dollar volume split — shows WHERE the money actually flows
+            bv = token_data.get(f"buy_volume_{period}")
+            sv = token_data.get(f"sell_volume_{period}")
+            if bv is not None and sv is not None:
+                total_sv = bv + sv
+                bv_pct = bv / total_sv * 100 if total_sv > 0 else 0
+                bv_str = f"${bv/1e6:.2f}M" if bv >= 1e6 else f"${bv:,.0f}"
+                sv_str = f"${sv/1e6:.2f}M" if sv >= 1e6 else f"${sv:,.0f}"
+                lines.append(f"  {period} $ vol split: {bv_str} buy / {sv_str} sell — {bv_pct:.0f}% of $ is buying")
 
-    # Volume sentiment — combines tx breadth (buy/sell ratio) with dollar depth (vol/MC)
+    # Volume sentiment — combines tx breadth + dollar depth, detects divergence
     vs = get_volume_sentiment(token_data)
-    if vs.get("narrative") and vs["label"] not in ("low_activity", "neutral"):
+    if vs.get("divergence"):
+        # Divergence is a high-signal event — surface it prominently
+        lines.append(f"  *** {vs['narrative']} ***")
+    elif vs.get("narrative") and vs["label"] not in ("low_activity", "neutral"):
         lines.append(f"  Volume sentiment: {vs['narrative']}")
 
     staking = token_data.get("staking_pct")

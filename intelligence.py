@@ -1364,19 +1364,35 @@ def get_price_context_for_all(projects: list[dict]) -> str:
 
 def get_volume_sentiment(token_data: dict) -> dict:
     """
-    Combine transaction count ratio (breadth) with dollar volume (depth) to
-    classify market sentiment for a token.
+    Combine transaction count ratio (breadth) with dollar volume depth to classify
+    market sentiment, and detect divergence between the two signals.
+
+    Two signal sources:
+      1. TX count ratio (always available): buy/sell count ratio → breadth
+         how many wallets are on each side
+      2. Buy/sell dollar volume split (when available from DexScreener):
+         where the MONEY is flowing → direction of conviction
+         When count ratio and volume ratio disagree, that divergence IS the signal.
+
+    When buy/sell volume split is unavailable, falls back to:
+      - vol/MC ratio → overall conviction depth
+      - avg_tx_size → proxy for whale vs retail (large avg size = fewer, bigger players)
+      - price-action divergence: count ratio vs price direction (detects hidden whale activity)
 
     Returns a dict with:
-      label         — one of: "whale_accumulation" | "retail_accumulation" |
-                               "heavy_conviction_buying" | "smart_money_exiting" |
-                               "retail_distribution" | "low_activity" | "neutral"
-      narrative     — short human-readable interpretation string (for prompt injection)
-      buy_ratio     — fraction of buys out of total txns (24h), or None
-      vol_mc_ratio  — volume / market_cap (24h), or None
-      avg_tx_size   — avg dollar size per transaction (24h), or None
-      conviction    — "high" | "medium" | "low" based on vol/MC
-      breadth       — "buy_dominant" | "sell_dominant" | "balanced" based on tx ratio
+      label             — sentiment classification string
+      narrative         — prompt-injectable description
+      divergence        — None | "bearish" | "bullish" (count vs volume disagreement)
+      divergence_detail — human-readable explanation of the divergence
+      buy_ratio         — fraction of buys out of total txns (24h), or None
+      buy_vol_ratio     — fraction of buy dollar volume out of total (24h), or None
+                          (None when DexScreener doesn't provide split volume)
+      vol_mc_ratio      — volume / market_cap (24h), or None
+      avg_tx_size       — avg dollar size per transaction (24h), or None
+      conviction        — "high" | "medium" | "low" based on vol/MC
+      breadth           — "buy_dominant" | "sell_dominant" | "balanced" based on tx count
+      vol_direction     — "buy_dominant" | "sell_dominant" | "balanced" based on dollar vol
+                          (matches breadth when split volume unavailable)
     """
     mc = token_data.get("market_cap") or 0
     vol24 = token_data.get("volume") or 0
@@ -1384,21 +1400,34 @@ def get_volume_sentiment(token_data: dict) -> dict:
     sells24 = token_data.get("sells_24h") or 0
     total_txns = buys24 + sells24
 
+    # Buy/sell dollar volume split — only present if DexScreener provides it
+    buy_vol24: float | None = token_data.get("buy_volume_24h")
+    sell_vol24: float | None = token_data.get("sell_volume_24h")
+    has_vol_split = buy_vol24 is not None and sell_vol24 is not None
+
+    # Price direction for divergence proxy when split volume is unavailable
+    price_chg_1h = token_data.get("price_change_1h")
+    price_chg_24h = token_data.get("price_change_24h")
+
     result: dict = {
         "label": "low_activity",
         "narrative": "",
+        "divergence": None,
+        "divergence_detail": None,
         "buy_ratio": None,
+        "buy_vol_ratio": None,
         "vol_mc_ratio": None,
         "avg_tx_size": None,
         "conviction": "low",
         "breadth": "balanced",
+        "vol_direction": "balanced",
     }
 
     if total_txns == 0 and vol24 == 0:
         result["narrative"] = "no activity data"
         return result
 
-    # ── Transaction breadth ───────────────────────────────────────────────────
+    # ── 1. Transaction count breadth ─────────────────────────────────────────
     buy_ratio: float | None = None
     if total_txns > 0:
         buy_ratio = buys24 / total_txns
@@ -1410,12 +1439,28 @@ def get_volume_sentiment(token_data: dict) -> dict:
         else:
             result["breadth"] = "balanced"
 
-    # ── Dollar volume conviction ──────────────────────────────────────────────
+    # ── 2. Buy/sell dollar volume direction ──────────────────────────────────
+    buy_vol_ratio: float | None = None
+    if has_vol_split:
+        total_side_vol = buy_vol24 + sell_vol24  # type: ignore[operator]
+        if total_side_vol > 0:
+            buy_vol_ratio = buy_vol24 / total_side_vol  # type: ignore[operator]
+            result["buy_vol_ratio"] = buy_vol_ratio
+            if buy_vol_ratio >= 0.60:
+                result["vol_direction"] = "buy_dominant"
+            elif buy_vol_ratio <= 0.40:
+                result["vol_direction"] = "sell_dominant"
+            else:
+                result["vol_direction"] = "balanced"
+    else:
+        # No split: vol_direction mirrors breadth as baseline
+        result["vol_direction"] = result["breadth"]
+
+    # ── 3. Overall vol/MC conviction depth ───────────────────────────────────
     vol_mc_ratio: float | None = None
     if mc > 0 and vol24 > 0:
         vol_mc_ratio = vol24 / mc
         result["vol_mc_ratio"] = vol_mc_ratio
-        # High conviction: vol > 20% of MC in 24h; medium: 5–20%; low: <5%
         if vol_mc_ratio >= 0.20:
             result["conviction"] = "high"
         elif vol_mc_ratio >= 0.05:
@@ -1423,29 +1468,80 @@ def get_volume_sentiment(token_data: dict) -> dict:
         else:
             result["conviction"] = "low"
 
-    # ── Average transaction size ──────────────────────────────────────────────
+    # ── 4. Average transaction size ──────────────────────────────────────────
     avg_tx_size: float | None = None
     if total_txns > 0 and vol24 > 0:
         avg_tx_size = vol24 / total_txns
         result["avg_tx_size"] = avg_tx_size
 
-    # ── Sentiment classification ──────────────────────────────────────────────
-    breadth = result["breadth"]
-    conviction = result["conviction"]
+    # ── 5. Divergence detection ───────────────────────────────────────────────
+    # Case A: real buy/sell volume split available — compare directly
+    if has_vol_split and buy_ratio is not None and buy_vol_ratio is not None:
+        count_buy_dominant = buy_ratio >= 0.55
+        vol_buy_dominant = buy_vol_ratio >= 0.55
+        count_sell_dominant = buy_ratio <= 0.45
+        vol_sell_dominant = buy_vol_ratio <= 0.45
 
-    if breadth == "buy_dominant" and conviction == "high":
+        if count_buy_dominant and vol_sell_dominant:
+            # Many small buy txns but dollar flow is sell-dominant → whales dumping
+            result["divergence"] = "bearish"
+            result["divergence_detail"] = (
+                f"BEARISH DIVERGENCE: {buy_ratio*100:.0f}% of txns are buys "
+                f"but {(1-buy_vol_ratio)*100:.0f}% of dollar volume is sells — "
+                "lots of small buyers, whale(s) distributing against them"
+            )
+        elif count_sell_dominant and vol_buy_dominant:
+            # Many small sell txns but dollar flow is buy-dominant → whales accumulating
+            result["divergence"] = "bullish"
+            result["divergence_detail"] = (
+                f"BULLISH DIVERGENCE: {(1-buy_ratio)*100:.0f}% of txns are sells "
+                f"but {buy_vol_ratio*100:.0f}% of dollar volume is buys — "
+                "retail shaking out while whale(s) accumulate quietly"
+            )
+
+    # Case B: no volume split — use price action vs count ratio as proxy
+    elif buy_ratio is not None and result["conviction"] in ("high", "medium"):
+        # Strong buy-count ratio but price is flat or falling = sells are bigger
+        if buy_ratio >= 0.60 and price_chg_1h is not None and price_chg_1h < -2.0:
+            result["divergence"] = "bearish"
+            result["divergence_detail"] = (
+                f"POSSIBLE BEARISH DIVERGENCE: {buy_ratio*100:.0f}% buy txns "
+                f"but price {price_chg_1h:+.1f}% in 1h — sell txns are larger on avg, "
+                "few big sellers offsetting many small buyers"
+            )
+        # Strong sell-count ratio but price is flat or rising = buys are bigger
+        elif buy_ratio <= 0.40 and price_chg_1h is not None and price_chg_1h > 2.0:
+            result["divergence"] = "bullish"
+            result["divergence_detail"] = (
+                f"POSSIBLE BULLISH DIVERGENCE: {(1-buy_ratio)*100:.0f}% sell txns "
+                f"but price {price_chg_1h:+.1f}% in 1h — buy txns are larger on avg, "
+                "quiet accumulation while many retail hands paper"
+            )
+
+    # ── 6. Sentiment label ────────────────────────────────────────────────────
+    breadth = result["breadth"]
+    vol_dir = result["vol_direction"]
+    conviction = result["conviction"]
+    divergence = result["divergence"]
+
+    if divergence == "bearish":
+        label = "bearish_divergence"
+    elif divergence == "bullish":
+        label = "bullish_divergence"
+    elif breadth == "buy_dominant" and vol_dir == "buy_dominant" and conviction == "high":
         label = "heavy_conviction_buying"
-    elif breadth == "buy_dominant" and conviction == "medium":
-        # Check if avg tx size suggests whales vs retail
+    elif breadth == "buy_dominant" and vol_dir == "buy_dominant":
+        # Distinguish whale vs retail by avg tx size
         if avg_tx_size and avg_tx_size >= 500:
             label = "whale_accumulation"
         else:
             label = "retail_accumulation"
-    elif breadth == "buy_dominant" and conviction == "low":
-        label = "retail_accumulation"
-    elif breadth == "sell_dominant" and conviction in ("high", "medium"):
+    elif breadth == "buy_dominant" and vol_dir != "buy_dominant":
+        # Already handled by divergence above, but catch any edge cases
+        label = "mixed_signals"
+    elif breadth == "sell_dominant" and vol_dir == "sell_dominant" and conviction in ("high", "medium"):
         label = "smart_money_exiting"
-    elif breadth == "sell_dominant" and conviction == "low":
+    elif breadth == "sell_dominant" and vol_dir == "sell_dominant":
         label = "retail_distribution"
     elif conviction == "high":
         label = "high_volume_neutral"
@@ -1454,29 +1550,49 @@ def get_volume_sentiment(token_data: dict) -> dict:
 
     result["label"] = label
 
-    # ── Narrative string for prompt injection ─────────────────────────────────
-    buy_pct_str = f"{buy_ratio*100:.0f}% buys" if buy_ratio is not None else "unknown buy ratio"
+    # ── 7. Narrative for prompt injection ────────────────────────────────────
+    buy_pct_str = f"{buy_ratio*100:.0f}% buy txns" if buy_ratio is not None else "unknown tx ratio"
     vol_str = f"${vol24/1e6:.2f}M vol" if vol24 >= 1e6 else f"${vol24:,.0f} vol"
     mc_str = f"${mc/1e6:.2f}M MC" if mc >= 1e6 else f"${mc:,.0f} MC"
     txn_str = f"{total_txns:,} txns" if total_txns > 0 else "no txns"
-    avg_str = f"~${avg_tx_size:,.0f}/tx" if avg_tx_size else ""
+    avg_str = f"~${avg_tx_size:,.0f}/tx avg" if avg_tx_size else ""
+
+    # Volume direction string
+    if has_vol_split and buy_vol_ratio is not None:
+        bv = buy_vol24 or 0
+        sv = sell_vol24 or 0
+        bv_str = f"${bv/1e6:.2f}M" if bv >= 1e6 else f"${bv:,.0f}"
+        sv_str = f"${sv/1e6:.2f}M" if sv >= 1e6 else f"${sv:,.0f}"
+        vol_dir_str = f"buy vol {bv_str} / sell vol {sv_str} ({buy_vol_ratio*100:.0f}% by $)"
+    else:
+        vol_dir_str = ""
 
     label_phrases = {
+        "bearish_divergence":       "BEARISH DIVERGENCE — many buyers, but money is selling",
+        "bullish_divergence":       "BULLISH DIVERGENCE — many sellers, but money is buying",
         "heavy_conviction_buying":  "heavy conviction buying — big money + one-sided txns",
-        "whale_accumulation":       "whale accumulation — few large txns, buy-dominant",
-        "retail_accumulation":      "retail accumulation — many small buys, no whale size yet",
-        "smart_money_exiting":      "smart money exiting — high volume, sell-dominant",
+        "whale_accumulation":       "whale accumulation — large avg tx, buy-dominant",
+        "retail_accumulation":      "retail accumulation — small buys, no whale size yet",
+        "smart_money_exiting":      "smart money exiting — high vol, sell-dominant",
         "retail_distribution":      "retail distribution — small sells dominating",
-        "high_volume_neutral":      "high-volume churn — conviction unclear, watch direction",
+        "mixed_signals":            "mixed signals — watch vol direction",
+        "high_volume_neutral":      "high-volume churn — conviction unclear",
         "neutral":                  "neutral activity",
         "low_activity":             "low activity",
     }
     phrase = label_phrases.get(label, label)
 
-    parts = [f"{txn_str} ({buy_pct_str})", f"{vol_str} on {mc_str}"]
+    parts = [f"{txn_str} ({buy_pct_str})"]
+    if vol_dir_str:
+        parts.append(vol_dir_str)
+    parts.append(f"{vol_str} on {mc_str}")
     if avg_str:
         parts.append(avg_str)
     parts.append(f"→ {phrase}")
 
-    result["narrative"] = " | ".join(parts)
+    if result["divergence_detail"]:
+        result["narrative"] = result["divergence_detail"]
+    else:
+        result["narrative"] = " | ".join(parts)
+
     return result

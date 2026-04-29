@@ -140,7 +140,9 @@ async def _fetch_dexscreener(session: aiohttp.ClientSession, contract_address: s
                     result["price_change_1h"] = float(chg.get("h1") or 0)
                     result["price_change_5m"] = float(chg.get("m5") or 0)
 
-                    # Transaction counts — buy/sell ratio is alpha
+                    # Transaction counts and buy/sell volume split.
+                    # DexScreener standard API provides counts (buys/sells) in txns[period].
+                    # Some API versions also include buyVolume/sellVolume — capture if present.
                     for period_key, period_label in [("h24", "24h"), ("h6", "6h"), ("h1", "1h"), ("m5", "5m")]:
                         txns = (pair.get("txns") or {}).get(period_key) or {}
                         buys = int(txns.get("buys") or 0)
@@ -149,6 +151,13 @@ async def _fetch_dexscreener(session: aiohttp.ClientSession, contract_address: s
                             result[f"buys_{period_label}"] = buys
                             result[f"sells_{period_label}"] = sells
                             result[f"txns_{period_label}"] = buys + sells
+                        # Buy/sell dollar volume split — present in some DexScreener API versions
+                        buy_vol = txns.get("buyVolume") or txns.get("buy_volume")
+                        sell_vol = txns.get("sellVolume") or txns.get("sell_volume")
+                        if buy_vol is not None:
+                            result[f"buy_volume_{period_label}"] = float(buy_vol)
+                        if sell_vol is not None:
+                            result[f"sell_volume_{period_label}"] = float(sell_vol)
 
                     # Pair age
                     created_at = pair.get("pairCreatedAt")
@@ -608,6 +617,13 @@ def fetch_token_data_sync(query: str, timeout: int = 8) -> Optional[dict]:
                 result[f"txns_{period_label}"] = buys + sells
                 result[f"buys_{period_label}"] = buys
                 result[f"sells_{period_label}"] = sells
+            # Buy/sell dollar volume split — present in some DexScreener API versions
+            buy_vol = txns.get("buyVolume") or txns.get("buy_volume")
+            sell_vol = txns.get("sellVolume") or txns.get("sell_volume")
+            if buy_vol is not None:
+                result[f"buy_volume_{period_label}"] = float(buy_vol)
+            if sell_vol is not None:
+                result[f"sell_volume_{period_label}"] = float(sell_vol)
 
         created_at = pair.get("pairCreatedAt")
         if created_at:
