@@ -114,6 +114,8 @@ async def _fetch_dexscreener(session: aiohttp.ClientSession, contract_address: s
                         reverse=True,
                     )
                     pair = pairs[0]
+                    base_token = pairs[0].get("baseToken") or {}
+                    dex_symbol = base_token.get("symbol", "").strip().lstrip("$").lower()
                     result = {
                         "price": float(pair.get("priceUsd") or 0),
                         "market_cap": float(pair.get("fdv") or pair.get("marketCap") or 0),
@@ -121,6 +123,8 @@ async def _fetch_dexscreener(session: aiohttp.ClientSession, contract_address: s
                         "chain": pair.get("chainId", ""),
                         "dex": pair.get("dexId", ""),
                     }
+                    if dex_symbol:
+                        result["dex_symbol"] = dex_symbol
 
                     # Volume at multiple intervals
                     vol = pair.get("volume") or {}
@@ -442,12 +446,18 @@ async def scrape_all_data() -> list[dict]:
             fetch_dune_context(session),
         )
 
-        # Build token list: start from KNOWN_CONTRACTS, then add any new contracts
-        # discovered from recent staking activity (all-brrr Solana addresses).
-        tokens: list[dict] = []
-        known_contracts_lower = {v.lower() for v in KNOWN_CONTRACTS.values()}
+        # Build token list: start from the full ecosystem contract set
+        # (KNOWN_CONTRACTS seed + DB-discovered tokens), then add any
+        # new contracts found live in staking positions.
+        from token_discovery import get_all_ecosystem_contracts
+        ecosystem_contracts = get_all_ecosystem_contracts()
 
-        for name, addr in KNOWN_CONTRACTS.items():
+        tokens: list[dict] = []
+        known_contracts_lower: dict[str, str] = {
+            addr.lower(): name for name, addr in ecosystem_contracts.items()
+        }
+
+        for name, addr in ecosystem_contracts.items():
             tokens.append({
                 "name": name,
                 "contract_address": addr,
@@ -459,13 +469,13 @@ async def scrape_all_data() -> list[dict]:
                 "staking_pct": None,
             })
 
-        # Add tokens discovered from staking positions (new Printr launches)
+        # Add any brand-new contracts from live staking not yet in the ecosystem set
         for contract in staking_totals:
             if contract.lower() not in known_contracts_lower:
-                # Only add Solana-style addresses (not EVM, not chain prefixes)
                 if _SOLANA_CONTRACT_RE.match(contract) and contract not in _CONTRACT_TO_NAME:
+                    placeholder_name = contract[:8].lower()
                     tokens.append({
-                        "name": contract[:8].lower(),  # short placeholder name
+                        "name": placeholder_name,
                         "contract_address": contract,
                         "market_cap": 0,
                         "price": 0,
@@ -474,7 +484,7 @@ async def scrape_all_data() -> list[dict]:
                         "liquidity": 0,
                         "staking_pct": None,
                     })
-                    known_contracts_lower.add(contract.lower())
+                    known_contracts_lower[contract.lower()] = placeholder_name
 
         with_contract = [t for t in tokens if t.get("contract_address")]
         without_contract = [t for t in tokens if not t.get("contract_address")]
@@ -488,7 +498,17 @@ async def scrape_all_data() -> list[dict]:
             dex_results = await asyncio.gather(*dex_coros, return_exceptions=True)
             for token, dex in zip(with_contract, dex_results):
                 if isinstance(dex, dict) and dex:
+                    # If the token has a placeholder name (short address fragment),
+                    # upgrade it with the real symbol from DexScreener.
+                    dex_symbol = dex.pop("dex_symbol", None)
                     token.update({k: v for k, v in dex.items() if v is not None})
+                    if dex_symbol:
+                        addr_lower = token.get("contract_address", "").lower()
+                        current_name = token.get("name", "")
+                        # Upgrade if name looks like a placeholder (8-char address prefix)
+                        is_placeholder = len(current_name) == 8 and current_name == addr_lower[:8]
+                        if is_placeholder:
+                            token["name"] = dex_symbol
                 # Compute staking % from Partner API totals + DexScreener supply
                 contract = token.get("contract_address", "")
                 if contract and staking_totals:

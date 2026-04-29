@@ -363,6 +363,20 @@ def init_db():
         """)
         conn.commit()
 
+        # Feature: Auto-discovery of Printr ecosystem tokens
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS discovered_tokens (
+                contract_address TEXT PRIMARY KEY,
+                ticker TEXT NOT NULL,
+                source TEXT DEFAULT 'staking',
+                needs_memes INTEGER DEFAULT 1,
+                first_seen TEXT DEFAULT (datetime('now')),
+                last_seen TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_discovered_tokens_ticker ON discovered_tokens(ticker);
+        """)
+        conn.commit()
+
 
 # --- replied_tweets ---
 
@@ -1404,3 +1418,58 @@ def get_all_research_findings(limit: int = 30) -> list[dict]:
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- discovered_tokens ---
+
+def upsert_discovered_token(
+    contract_address: str,
+    ticker: str,
+    source: str = "staking",
+    needs_memes: bool = True,
+) -> bool:
+    """Insert or update a discovered token. Returns True if this is a brand-new token."""
+    with db() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM discovered_tokens WHERE contract_address = ?",
+            (contract_address,),
+        ).fetchone()
+        is_new = existing is None
+        conn.execute(
+            """INSERT INTO discovered_tokens (contract_address, ticker, source, needs_memes)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(contract_address) DO UPDATE SET
+                   ticker = CASE WHEN excluded.ticker != contract_address THEN excluded.ticker ELSE ticker END,
+                   last_seen = datetime('now')""",
+            (contract_address, ticker, source, int(needs_memes)),
+        )
+        return is_new
+
+
+def get_discovered_tokens() -> list[dict]:
+    """Return all discovered tokens, most recently seen first."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT contract_address, ticker, source, needs_memes, first_seen, last_seen "
+            "FROM discovered_tokens ORDER BY last_seen DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_tokens_needing_memes() -> list[dict]:
+    """Return newly discovered tokens that still need meme images."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT contract_address, ticker, source, first_seen "
+            "FROM discovered_tokens WHERE needs_memes = 1 ORDER BY first_seen DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_memes_provided(contract_address: str) -> None:
+    """Clear the needs_memes flag once meme images have been added."""
+    with db() as conn:
+        conn.execute(
+            "UPDATE discovered_tokens SET needs_memes = 0 WHERE contract_address = ?",
+            (contract_address,),
+        )

@@ -12,6 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import database
 import bot
 import intelligence as intel_mod
+import token_discovery
 
 logging.basicConfig(
     level=logging.INFO,
@@ -95,6 +96,11 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(bot.post_original_tweet, "interval", minutes=60, id="original_tweeter",
                           replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=60,
                           next_run_time=_original_tweet_first_run)
+    scheduler.add_job(
+        token_discovery.discover_and_persist_tokens_async,
+        "interval", minutes=30, id="token_discoverer", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=120, next_run_time=_now,
+    )
     scheduler.add_job(bot.refresh_ecosystem_context, "interval", hours=6, id="ecosystem_refresher", replace_existing=True,
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True,
@@ -151,6 +157,7 @@ async def lifespan(app: FastAPI):
     logger.info(
         f"Schedulers started: mentions (5 min), QT glazer (30 min), original tweets ({time_opt_status}), "
         f"intelligence refresh (15 min), ecosystem refresh (6h), ticker refresh (6h), "
+        f"token discovery (30 min), "
         f"{launch_detection_status}, {whale_status}, {competitor_status}, {thread_mode_status}, "
         f"{correlation_status}, {staking_status}, "
         f"{burn_status}, {rewards_status}, {launch_guide_status}, {wallet_status}, {glazing_status}, "
@@ -370,6 +377,34 @@ async def api_reset_counter(_: None = Depends(_require_auth)):
     shifted = database.reset_daily_reply_counter()
     logger.info("Daily reply counter reset via API, shifted %d rows", shifted)
     return {"status": "reset", "rows_shifted": shifted, "replies_today": database.count_replies_today()}
+
+
+@app.get("/api/discovered-tokens")
+async def api_discovered_tokens(_: None = Depends(_require_auth)):
+    """Return all discovered ecosystem tokens. Includes needs_memes flag."""
+    return {
+        "tokens": database.get_discovered_tokens(),
+        "needs_memes": database.get_tokens_needing_memes(),
+    }
+
+
+@app.post("/api/mark-memes-provided")
+async def api_mark_memes_provided(body: dict, _: None = Depends(_require_auth)):
+    """Clear needs_memes flag for a token once meme images have been added."""
+    contract = body.get("contract_address", "")
+    if not contract:
+        raise HTTPException(status_code=400, detail="contract_address required")
+    database.mark_memes_provided(contract)
+    return {"status": "ok", "contract_address": contract}
+
+
+@app.post("/api/trigger-token-discovery")
+async def api_trigger_token_discovery(_: None = Depends(_require_auth)):
+    """Manually trigger a token discovery scan."""
+    async def _run():
+        await token_discovery.discover_and_persist_tokens_async()
+    asyncio.create_task(_run())
+    return {"status": "triggered"}
 
 
 @app.get("/health")
