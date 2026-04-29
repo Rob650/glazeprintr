@@ -71,7 +71,7 @@ ENABLE_THREAD_MODE = os.environ.get("ENABLE_THREAD_MODE", "false").lower() == "t
 ENABLE_CORRELATION_TWEETS = os.environ.get("ENABLE_CORRELATION_TWEETS", "false").lower() == "true"
 ENABLE_STAKING_TWEETS = os.environ.get("ENABLE_STAKING_TWEETS", "false").lower() == "true"
 ENABLE_WALLET_PROFILING = os.environ.get("ENABLE_WALLET_PROFILING", "false").lower() == "true"
-ENABLE_WALLET_GLAZING = os.environ.get("ENABLE_WALLET_GLAZING", "false").lower() == "true"
+ENABLE_WALLET_GLAZING = os.environ.get("ENABLE_WALLET_GLAZING", "true").lower() == "true"
 MAX_THREADS_PER_DAY = 2
 _THREAD_HEAT_THRESHOLD = 85.0
 _THREAD_24H_THRESHOLD = 50.0

@@ -22,9 +22,11 @@ from scraper import KNOWN_CONTRACTS, fetch_token_data_sync
 
 logger = logging.getLogger(__name__)
 
-# NO TRANSFER FUNCTIONS — wallet is deposit + stake only
-BOT_WALLET_ADDRESS: str = os.environ.get("BOT_WALLET_ADDRESS", "")
-# Private key is for staking ONLY — never used for transfers
+# NO TRANSFER FUNCTIONS — wallet is deposit + stake only.
+# Public address is hardcoded so the bot can share it openly. Env override allowed for testing.
+BOT_WALLET_ADDRESS_DEFAULT = "8V9eDTUG8ZFa7sC8SZxgHs8bqEUTet7aHjZT9zsFq3Mv"
+BOT_WALLET_ADDRESS: str = os.environ.get("BOT_WALLET_ADDRESS") or BOT_WALLET_ADDRESS_DEFAULT
+# Private key is env-var ONLY — NEVER hardcode. Used for staking signatures only, never transfers.
 BOT_WALLET_PRIVATE_KEY: str = os.environ.get("BOT_WALLET_PRIVATE_KEY", "")
 
 _SOLANA_RPC = "https://api.mainnet-beta.solana.com"

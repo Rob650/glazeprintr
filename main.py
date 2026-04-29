@@ -31,7 +31,7 @@ ENABLE_BURN_TRACKING = os.environ.get("ENABLE_BURN_TRACKING", "false").lower() =
 ENABLE_REWARDS_DATA = os.environ.get("ENABLE_REWARDS_DATA", "false").lower() == "true"
 ENABLE_LAUNCH_GUIDE = os.environ.get("ENABLE_LAUNCH_GUIDE", "false").lower() == "true"
 ENABLE_WALLET_PROFILING = os.environ.get("ENABLE_WALLET_PROFILING", "false").lower() == "true"
-ENABLE_WALLET_GLAZING = os.environ.get("ENABLE_WALLET_GLAZING", "false").lower() == "true"
+ENABLE_WALLET_GLAZING = os.environ.get("ENABLE_WALLET_GLAZING", "true").lower() == "true"
 
 scheduler = AsyncIOScheduler()
 
