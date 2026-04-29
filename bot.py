@@ -1850,7 +1850,12 @@ async def post_original_tweet():
                 )
                 wallet_str = wallet_summary.get("formatted", "")
 
-            historical_parts = filter(None, [setups_str, rules_str, hist_comparisons, divergence_str, wallet_str])
+            # Chart phase / price history context (ATH, drawdown, bounce, phase classification)
+            price_ctx = await loop.run_in_executor(
+                None, lambda: intel_mod.get_price_context_for_all(projects)
+            )
+
+            historical_parts = filter(None, [price_ctx, setups_str, rules_str, hist_comparisons, divergence_str, wallet_str])
             historical_ctx = "\n\n".join(historical_parts)
         except Exception as e:
             logger.warning(f"historical context build error: {e}")

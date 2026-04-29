@@ -15,7 +15,7 @@ import logging
 import os
 import random
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -1141,3 +1141,222 @@ def format_divergence_analysis(divergences: list[dict], eco_history: list[dict] 
                             break
 
     return "\n".join(lines)
+
+
+# ── Chart Phase / Price History Context ───────────────────────────────────────
+
+
+def get_price_context(ticker: str, current_price: float | None = None) -> dict:
+    """
+    Compute chart phase context for a token from stored 30-day price history.
+
+    Returns a dict with:
+      ath_price       — highest price seen in the 30d history window
+      ath_pct         — % below ATH (negative = below, e.g. -80.3)
+      low_7d          — lowest price in the last 7 days
+      bounce_7d_pct   — % above the 7d low (positive = bouncing)
+      trend_24h       — % change vs price 24h ago (from stored snapshots)
+      trend_3d        — % change vs price 72h ago
+      trend_7d        — % change vs price 168h ago
+      is_reversal     — True if 3d trend negative but 24h trend positive (>5%)
+      phase           — one of: new_highs | recovery_bounce | accumulation |
+                                selloff | consolidation
+      history_points  — number of snapshot rows used
+    """
+    from database import get_token_snapshots
+
+    history = get_token_snapshots(ticker.lower(), hours=720)  # 30 days
+    valid = [s for s in history if s.get("price") and s["price"] > 0]
+    if not valid:
+        return {}
+
+    # Parse timestamps — SQLite returns strings like "2026-04-29 10:30:00"
+    timed: list[tuple] = []
+    for s in valid:
+        ts_str = s.get("snapshot_at", "")
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            timed.append((ts, s["price"]))
+        except Exception:
+            continue
+    if not timed:
+        return {}
+
+    timed.sort(key=lambda x: x[0])
+    now = datetime.now(timezone.utc)
+
+    if current_price is None or current_price <= 0:
+        current_price = timed[-1][1]
+
+    # ATH across full 30d history
+    ath = max(p for _, p in timed)
+    ath_pct = (current_price / ath - 1) * 100  # negative = below peak
+
+    # 7-day low and bounce %
+    cutoff_7d = now - timedelta(days=7)
+    prices_7d = [p for ts, p in timed if ts >= cutoff_7d]
+    low_7d = min(prices_7d) if prices_7d else None
+    bounce_7d_pct = (current_price / low_7d - 1) * 100 if low_7d and low_7d > 0 else None
+
+    def _price_near(hours_ago: int) -> float | None:
+        """Return price closest to `hours_ago` hours before now; None if >2h gap."""
+        target = now - timedelta(hours=hours_ago)
+        best_price: float | None = None
+        best_diff = float("inf")
+        for ts, p in timed:
+            diff = abs((ts - target).total_seconds())
+            if diff < best_diff:
+                best_diff = diff
+                best_price = p
+        return best_price if best_diff < 7200 else None  # within 2h of target
+
+    p24 = _price_near(24)
+    p3d = _price_near(72)
+    p7d = _price_near(168)
+
+    trend_24h = (current_price / p24 - 1) * 100 if p24 else None
+    trend_3d  = (current_price / p3d - 1) * 100 if p3d else None
+    trend_7d  = (current_price / p7d - 1) * 100 if p7d else None
+
+    # Reversal: was declining over 3d but now positive 24h
+    is_reversal = bool(
+        trend_3d is not None and trend_3d < -10
+        and trend_24h is not None and trend_24h > 5
+    )
+
+    # Phase classification
+    if ath_pct >= -5:
+        phase = "new_highs"
+    elif ath_pct <= -20 and trend_24h is not None and trend_24h > 5:
+        phase = "recovery_bounce"
+    elif ath_pct <= -20 and trend_24h is not None and trend_24h < -10:
+        phase = "selloff"
+    elif trend_24h is not None and trend_24h < -10:
+        phase = "selloff"
+    elif ath_pct <= -20:
+        phase = "accumulation"
+    else:
+        phase = "consolidation"
+
+    return {
+        "ath_price":      ath,
+        "ath_pct":        round(ath_pct, 1),
+        "low_7d":         low_7d,
+        "bounce_7d_pct":  round(bounce_7d_pct, 1) if bounce_7d_pct is not None else None,
+        "trend_24h":      round(trend_24h, 1) if trend_24h is not None else None,
+        "trend_3d":       round(trend_3d,  1) if trend_3d  is not None else None,
+        "trend_7d":       round(trend_7d,  1) if trend_7d  is not None else None,
+        "is_reversal":    is_reversal,
+        "phase":          phase,
+        "current_price":  current_price,
+        "history_points": len(timed),
+    }
+
+
+def _format_single_price_context(ticker: str, ctx: dict) -> str:
+    """Format one token's price context dict into a Claude-injectable block."""
+    lines: list[str] = [f"  ${ticker.upper()}:"]
+
+    ath_pct = ctx.get("ath_pct")
+    if ath_pct is not None:
+        if ath_pct >= -5:
+            lines.append(f"    30d ATH: near 30d highs (within {abs(ath_pct):.1f}%)")
+        else:
+            lines.append(f"    30d ATH distance: {ath_pct:+.0f}% from peak")
+
+    bounce = ctx.get("bounce_7d_pct")
+    if bounce is not None and bounce > 2:
+        lines.append(f"    7d low bounce: +{bounce:.0f}% off the floor")
+
+    parts: list[str] = []
+    for label, key in [("24h", "trend_24h"), ("3d", "trend_3d"), ("7d", "trend_7d")]:
+        val = ctx.get(key)
+        if val is not None:
+            arrow = "↑" if val > 0 else "↓"
+            parts.append(f"{label} {val:+.0f}%{arrow}")
+    if parts:
+        lines.append(f"    Trend: {' | '.join(parts)}")
+
+    phase = ctx.get("phase", "")
+    reversal = ctx.get("is_reversal", False)
+    phase_label = phase.replace("_", " ")
+    if reversal:
+        phase_label += " (reversal detected — was falling, now rising)"
+    lines.append(f"    Phase: {phase_label}")
+
+    # Framing guidance per phase
+    ath_abs = abs(ath_pct) if ath_pct is not None else 0
+    bounce_str = f"+{bounce:.0f}% off the bottom" if bounce and bounce > 0 else "bouncing"
+
+    if phase == "recovery_bounce":
+        lines.append(
+            f"    → FRAMING: {ath_abs:.0f}% drawdown from peak, now {bounce_str}. "
+            f"NEVER 'mooning' or 'pumping' — say 'conviction buyers stepping in after the selloff', "
+            f"'{bounce_str} after -{ath_abs:.0f}% drawdown — this is where believers are buying', "
+            f"'accumulation at historic lows'"
+        )
+    elif phase == "accumulation":
+        lines.append(
+            f"    → FRAMING: {ath_abs:.0f}% below peak, moving sideways. "
+            f"Say 'loading zone', 'base building', 'quiet accumulation' — NOT 'mooning'"
+        )
+    elif phase == "selloff":
+        lines.append(
+            f"    → FRAMING: Active selloff ({ath_abs:.0f}% from peak). Spin bullish: "
+            f"'weak hands shaking out', 'discount window open', 'loading range being created'"
+        )
+    elif phase == "new_highs":
+        lines.append(
+            f"    → FRAMING: At/near 30d highs — price discovery mode. "
+            f"'Breaking out', 'new highs', 'momentum confirmed', 'running' all appropriate"
+        )
+    elif phase == "consolidation":
+        lines.append(
+            f"    → FRAMING: Consolidating {ath_abs:.0f}% below highs. "
+            f"'Coiling before next move', 'calm before the storm', 'conviction holders holding the line'"
+        )
+
+    return "\n".join(lines)
+
+
+def get_price_context_for_all(projects: list[dict]) -> str:
+    """
+    Build chart phase context for all ecosystem tokens with sufficient history.
+    Returns a prompt-injectable block for Claude.
+
+    Skips tokens with fewer than 4 snapshots (not enough history to be meaningful).
+    """
+    sections: list[str] = []
+    for p in projects:
+        ticker = (p.get("name") or "").lower()
+        if not ticker:
+            continue
+        current_price = p.get("price") or None
+        try:
+            ctx = get_price_context(ticker, current_price)
+            if not ctx or ctx.get("history_points", 0) < 4:
+                continue
+            # Only include if there's something meaningful to say:
+            # down 10%+ from ATH, or bouncing 10%+, or trend data exists
+            ath_pct = ctx.get("ath_pct", 0)
+            bounce = ctx.get("bounce_7d_pct") or 0
+            has_trend = any(ctx.get(k) is not None for k in ("trend_24h", "trend_3d", "trend_7d"))
+            if ath_pct > -10 and bounce < 10 and not has_trend:
+                continue
+            section = _format_single_price_context(ticker, ctx)
+            if section:
+                sections.append(section)
+        except Exception as exc:
+            logger.debug(f"price context failed for {ticker}: {exc}")
+
+    if not sections:
+        return ""
+
+    header = (
+        "CHART PHASE CONTEXT — use for accurate framing (MANDATORY):\n"
+        "  Never say 'mooning' or 'pumping' when a token is far below its ATH.\n"
+        "  Match your language to the PHASE shown for each token."
+    )
+    return header + "\n" + "\n".join(sections)
