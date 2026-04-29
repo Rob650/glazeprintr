@@ -31,7 +31,7 @@ ENABLE_BURN_TRACKING = os.environ.get("ENABLE_BURN_TRACKING", "false").lower() =
 ENABLE_REWARDS_DATA = os.environ.get("ENABLE_REWARDS_DATA", "false").lower() == "true"
 ENABLE_LAUNCH_GUIDE = os.environ.get("ENABLE_LAUNCH_GUIDE", "false").lower() == "true"
 ENABLE_WALLET_PROFILING = os.environ.get("ENABLE_WALLET_PROFILING", "false").lower() == "true"
-ENABLE_WALLET_GLAZING = os.environ.get("ENABLE_WALLET_GLAZING", "false").lower() == "true"
+ENABLE_WALLET_GLAZING = os.environ.get("ENABLE_WALLET_GLAZING", "true").lower() == "true"
 ENABLE_AUTO_CLAIM_REWARDS = os.environ.get("ENABLE_AUTO_CLAIM_REWARDS", "false").lower() == "true"
 
 scheduler = AsyncIOScheduler()
@@ -126,7 +126,7 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(_wallet_refresh_job, "interval", hours=6, id="wallet_profiler", replace_existing=True,
                           max_instances=1, coalesce=True, misfire_grace_time=300, next_run_time=_now)
     if ENABLE_WALLET_GLAZING:
-        scheduler.add_job(bot.scan_and_stake, "interval", minutes=15, id="wallet_glazer", replace_existing=True,
+        scheduler.add_job(bot.scan_wallet, "interval", minutes=15, id="wallet_glazer", replace_existing=True,
                           max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     if ENABLE_AUTO_CLAIM_REWARDS:
         scheduler.add_job(bot.claim_staking_rewards, "interval", seconds=604800, id="rewards_claimer", replace_existing=True,

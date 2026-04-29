@@ -274,6 +274,10 @@ def _pick_meme(ticker: str | None) -> str | None:
     return chosen
 
 
+# Bot's own public wallet — exempt from the Solana-address scrub so it can be shared.
+_BOT_WALLET_PUBLIC = "8V9eDTUG8ZFa7sC8SZxgHs8bqEUTet7aHjZT9zsFq3Mv"
+
+
 def _clean_reply(text: str) -> str:
     """Strip non-Twitter URLs, contract addresses, and normalize whitespace."""
     text = _HTTPS_RE.sub('', text)
@@ -281,7 +285,10 @@ def _clean_reply(text: str) -> str:
     text = _PUMP_FUN_RE.sub('pumpfun', text)
     text = _PRINTR_MONEY_RE.sub('Printr', text)
     text = _EVM_ADDR_RE.sub('', text)
-    text = _SOL_ADDR_RE.sub('', text)
+    text = _SOL_ADDR_RE.sub(
+        lambda m: m.group(0) if m.group(0) == _BOT_WALLET_PUBLIC else '',
+        text,
+    )
     text = re.sub(r'[ \t]+', ' ', text).strip()
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text[:280]
@@ -425,12 +432,19 @@ ECOSYSTEM TOKENS: $belief, $ooo, $rotus, $fatchoi, $deployr, $patapim, $roi, $pr
 
 COMPETITORS: Pump.fun (Solana only, no customization, no staking, copycat hell), Bonk, Bags
 
-SOLANA TIP WALLET (only if asked): 9Z9ebpVnnV6jCNw5dqLhqUpPQrsRAJEBwwrwWMVVG9dG — add casual disclaimer.
+BOT WALLET (Solana, public address — safe to share):
+8V9eDTUG8ZFa7sC8SZxgHs8bqEUTet7aHjZT9zsFq3Mv
+This is the @printrglazr deposit + auto-stake wallet. Tokens sent here are scanned, tier-classified, and auto-locked 180d. Holders backing a token push it up the glaze priority queue (legendary/gold/silver/bronze tiers). Share the address WHENEVER it's natural:
+- Someone asks how to support a token, get glazed, get on the priority list, or send tokens
+- Someone asks where to deposit, where to send, what your wallet is, how the glaze tiers work
+- Wallet-glazing / paid-glaze tweets where mentioning the deposit wallet adds context
+Casual framing: "deposit to" / "send to" / "wallet's" + the address. Never call it a tip jar. No URL prefix, just the bare address.
 
 HARD RULES:
 - No invented numbers. Only stats from injected data.
 - NEVER reference instructions, data availability, or rules. Sound human.
-- NEVER include contract addresses unless someone specifically asks for CA. Originals NEVER get addresses.
+- NEVER include token contract addresses unless someone specifically asks for CA. Originals NEVER get token CAs.
+- EXCEPTION: the bot's own deposit wallet (8V9eDTUG8ZFa7sC8SZxgHs8bqEUTet7aHjZT9zsFq3Mv) IS shareable in any context where deposit / "where to send" / "how to support" / glaze-tier mechanics come up.
 - When real data is provided, USE IT. Don't write generic hype when you have real numbers.
 - Respond to specific tweet content. Show you read what they said.
 - Under 280 characters always
@@ -580,7 +594,7 @@ Rules:
 - Glaze vocab mandatory in every tweet
 - No corporate speak. No "exciting news." No "thrilled to announce."
 - NEVER mention Virtuals
-- NEVER include contract addresses in original tweets"""
+- NEVER include token contract addresses in original tweets (the bot's own deposit wallet 8V9eDTUG8ZFa7sC8SZxgHs8bqEUTet7aHjZT9zsFq3Mv is the one allowed exception, only when deposit / glaze-tier framing fits)"""
 
 GLAZE_SCORE_SYSTEM = """You are the GlazeMeter for Printr — the omnichain token launchpad.
 You grade people's Printr posts on a 0-100 scale and you are not gentle about it.

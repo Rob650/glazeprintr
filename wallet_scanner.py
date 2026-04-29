@@ -1,12 +1,12 @@
 """
 Wallet scanner and glaze priority engine for GlazePrintr.
 
-Scans the bot's Solana wallet for Printr ecosystem tokens, calculates glaze
-tiers based on TOTAL holdings (wallet balance + staked), and auto-stakes any
-unstaked balance via the Printr API.
+Scans the bot's Solana wallet for Printr ecosystem tokens and calculates
+glaze tiers based on TOTAL holdings (wallet balance + any pre-existing
+staked positions).
 
-NO TRANSFER FUNCTIONS — wallet is deposit + stake only.
-Private key is for staking ONLY — never used for transfers.
+RECEIVE-ONLY — the bot never stakes, transfers, or moves tokens. It only
+reads on-chain balances and uses them to drive glaze priority.
 """
 import asyncio
 import json
@@ -22,17 +22,14 @@ from scraper import KNOWN_CONTRACTS, fetch_token_data_sync
 
 logger = logging.getLogger(__name__)
 
-# NO TRANSFER FUNCTIONS — wallet is deposit + stake only
-BOT_WALLET_ADDRESS: str = os.environ.get("BOT_WALLET_ADDRESS", "")
-# Private key is for staking ONLY — never used for transfers
-BOT_WALLET_PRIVATE_KEY: str = os.environ.get("BOT_WALLET_PRIVATE_KEY", "")
+# RECEIVE-ONLY — wallet is deposit only. No staking, no transfers.
+# Public address is hardcoded so the bot can share it openly. Env override allowed for testing.
+BOT_WALLET_ADDRESS_DEFAULT = "8V9eDTUG8ZFa7sC8SZxgHs8bqEUTet7aHjZT9zsFq3Mv"
+BOT_WALLET_ADDRESS: str = os.environ.get("BOT_WALLET_ADDRESS") or BOT_WALLET_ADDRESS_DEFAULT
 
 _SOLANA_RPC = "https://api.mainnet-beta.solana.com"
 _TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 _PRINTR_API_BASE = "https://api-preview.printr.money/v1"
-_SOLANA_CHAIN_ID = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
-_STAKE_LOCK_DAYS = 180   # max conviction, highest multiplier
-_STAKE_MIN_USD = 5.0     # minimum USD value to trigger auto-stake
 
 # Reverse mapping: mint address → ticker
 _MINT_TO_TICKER: dict[str, str] = {v: k for k, v in KNOWN_CONTRACTS.items()}
@@ -224,13 +221,14 @@ def _assign_tier(total_usd: float) -> Optional[tuple[str, int]]:
 
 
 # ---------------------------------------------------------------------------
-# Glaze priority — lightweight DB reads (populated by scan_and_stake)
+# Glaze priority — lightweight DB reads (populated by scan_wallet)
 # ---------------------------------------------------------------------------
 
 def get_glaze_priority() -> dict[str, dict]:
     """
     Returns {ticker: {tier, usd_value, daily_glazes, last_glazed_at}} from DB cache.
-    Tier is based on TOTAL value (wallet balance + staked). Updated by scan_and_stake.
+    Tier is based on TOTAL value (wallet balance + any pre-existing staked positions).
+    Updated by scan_wallet.
     """
     result: dict[str, dict] = {}
     for holding in db.get_wallet_holdings():
@@ -271,173 +269,16 @@ def should_glaze_now(ticker: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Auto-staking
+# Full scan pipeline (RECEIVE-ONLY — no staking, no transfers)
 # ---------------------------------------------------------------------------
 
-def _create_staking_position(ticker: str, mint: str, amount: float, decimals: int) -> Optional[str]:
-    """
-    POST /v1/staking/create-position to stake `amount` tokens for 180 days.
-    Returns tx_hash/signature string on success, None on failure.
-
-    Private key is for staking ONLY — never used for transfers.
-    """
-    from printr_api import get_cookie, invalidate_cookie  # type: ignore
-
-    if not BOT_WALLET_PRIVATE_KEY:
-        logger.info(f"No BOT_WALLET_PRIVATE_KEY — skipping auto-stake for {ticker}")
-        return None
-
-    cookie = get_cookie()
-    if not cookie:
-        logger.warning(f"Printr API: no auth cookie — skipping stake for {ticker}")
-        return None
-
-    atomic_amount = int(amount * (10 ** decimals))
-    payload = json.dumps({
-        "mint_address":      mint,
-        "amount":            atomic_amount,
-        "decimals":          decimals,
-        "lock_duration_days": _STAKE_LOCK_DAYS,
-        "wallet_address":    BOT_WALLET_ADDRESS,
-        "chain":             _SOLANA_CHAIN_ID,
-    }).encode()
-
-    class _NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, *args, **kwargs):
-            return None
-
-    opener = urllib.request.build_opener(_NoRedirect())
-    req = urllib.request.Request(
-        f"{_PRINTR_API_BASE}/staking/create-position",
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Cookie":        f"printr-integrator-token={cookie}",
-            "Accept":        "application/json",
-        },
-    )
-    try:
-        with opener.open(req, timeout=20) as resp:
-            if resp.status == 200:
-                data = json.loads(resp.read())
-                tx_hash = (
-                    data.get("tx_hash")
-                    or data.get("signature")
-                    or data.get("transaction")
-                    or "submitted"
-                )
-                # If API returned a raw transaction to sign, attempt signing
-                if isinstance(tx_hash, str) and len(tx_hash) > 100:
-                    tx_hash = _sign_and_submit(tx_hash) or tx_hash
-                logger.info(f"Staked {amount:.4f} {ticker} 180d: {tx_hash}")
-                return str(tx_hash)
-    except urllib.error.HTTPError as e:
-        if e.code == 307:
-            invalidate_cookie()
-        logger.warning(f"create-position failed for {ticker}: HTTP {e.code}")
-    except Exception as e:
-        logger.warning(f"create-position error for {ticker}: {e}")
-
-    return None
-
-
-def _sign_and_submit(tx_base64: str) -> Optional[str]:
-    """
-    Sign a base64-encoded Solana transaction with the bot's private key and submit it.
-    Private key is for staking ONLY — never used for transfers.
-    Returns on-chain signature or None if signing not available.
-    """
-    if not BOT_WALLET_PRIVATE_KEY:
-        return None
-    try:
-        import base64
-        import base58  # type: ignore
-        import nacl.signing  # type: ignore
-
-        key_bytes = base58.b58decode(BOT_WALLET_PRIVATE_KEY)
-        # Solana keypairs are 64 bytes (seed+pubkey); signing key uses first 32
-        signing_key = nacl.signing.SigningKey(key_bytes[:32])
-
-        tx_bytes = base64.b64decode(tx_base64)
-        signed = signing_key.sign(tx_bytes)
-        signature_b58 = base58.b58encode(signed.signature).decode()
-
-        signed_tx_b64 = base64.b64encode(signed.message + signed.signature).decode()
-        resp = _rpc_call("sendTransaction", [signed_tx_b64, {"encoding": "base64"}])
-        if resp and "result" in resp:
-            return resp["result"]
-        return signature_b58
-    except ImportError:
-        logger.debug("PyNaCl/base58 not installed — tx signing skipped")
-    except Exception as e:
-        logger.warning(f"Transaction signing failed: {e}")
-    return None
-
-
-def auto_stake_wallet(
-    wallet_balances: list[dict],
-    staked_amounts: dict[str, float],
-) -> list[dict]:
-    """
-    Stake any unstaked wallet balances above the minimum threshold.
-    Lock duration: 180 days (max conviction, highest multiplier).
-    Logs all attempts. Never crashes — errors are logged and skipped.
-
-    NO TRANSFER FUNCTIONS — wallet is deposit + stake only.
-    """
-    # NO TRANSFER FUNCTIONS — wallet is deposit + stake only
-    if not BOT_WALLET_PRIVATE_KEY:
-        logger.info("BOT_WALLET_PRIVATE_KEY not set — auto-staking disabled (scan/glaze still active)")
-        return []
-
-    results: list[dict] = []
-    for holding in wallet_balances:
-        ticker   = holding["ticker"]
-        mint     = holding["mint"]
-        balance  = holding["balance"]
-        usd_val  = holding["usd_value"]
-        decimals = holding["decimals"]
-
-        if usd_val < _STAKE_MIN_USD:
-            logger.debug(f"Skip stake {ticker}: ${usd_val:.2f} < ${_STAKE_MIN_USD} threshold")
-            continue
-
-        already = staked_amounts.get(ticker, 0.0)
-        # Skip if already fully staked (allow 5% tolerance for rounding)
-        if already >= balance * 0.95:
-            logger.debug(f"Skip stake {ticker}: already staked {already:.4f} ≥ balance {balance:.4f}")
-            continue
-
-        logger.info(f"Auto-staking {balance:.4f} {ticker} (${usd_val:.2f}) for {_STAKE_LOCK_DAYS} days")
-        tx_hash = None
-        status  = "failed"
-        try:
-            tx_hash = _create_staking_position(ticker, mint, balance, decimals)
-            if tx_hash:
-                status = "confirmed"
-            else:
-                logger.warning(f"Staking returned no tx hash for {ticker}")
-        except Exception as e:
-            logger.warning(f"Staking exception for {ticker}: {e}")
-
-        db.record_staking_tx(ticker, balance, _STAKE_LOCK_DAYS, tx_hash or "", status)
-        results.append({"ticker": ticker, "amount": balance, "status": status, "tx_hash": tx_hash})
-
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Full scan-and-stake pipeline
-# ---------------------------------------------------------------------------
-
-def _scan_and_stake_sync() -> None:
+def _scan_wallet_sync() -> None:
     """
     Full sync pipeline:
       1. Scan wallet balances via Solana RPC
-      2. Fetch staked positions via Printr API (or DB fallback)
+      2. Fetch any pre-existing staked positions via Printr API (or DB fallback)
       3. Compute total USD per token (wallet + staked) → assign glaze tier
       4. Upsert wallet_holdings in DB
-      5. Auto-stake any unstaked balances above threshold
     """
     if not BOT_WALLET_ADDRESS:
         logger.info("WALLET GLAZING: BOT_WALLET_ADDRESS not set — skipping")
@@ -465,7 +306,7 @@ def _scan_and_stake_sync() -> None:
         wallet_bal = (wallet_by_ticker.get(ticker) or {}).get("balance", 0.0)
         staked_bal = staked_amounts.get(ticker, 0.0)
         price      = prices.get(ticker, 0.0)
-        # Tier is based on TOTAL value: wallet balance + staked
+        # Tier is based on TOTAL value: wallet balance + any pre-existing staked positions
         total_usd  = (wallet_bal + staked_bal) * price
         mint       = KNOWN_CONTRACTS.get(ticker, "")
 
@@ -487,19 +328,17 @@ def _scan_and_stake_sync() -> None:
                 f"staked={staked_bal:.4f} total=${total_usd:.2f} tier={tier}"
             )
 
-    # Auto-stake any unstaked balances
-    if wallet_balances:
-        auto_stake_wallet(wallet_balances, staked_amounts)
 
-
-async def scan_and_stake() -> None:
-    """Async entry point: runs the full scan-and-stake pipeline in a thread executor."""
+async def scan_wallet() -> None:
+    """Async entry point: runs the full receive-only scan pipeline in a thread executor."""
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _scan_and_stake_sync)
+    await loop.run_in_executor(None, _scan_wallet_sync)
 
 
 # ---------------------------------------------------------------------------
-# Auto-claim staking rewards
+# Auto-claim staking rewards (default off — gated by ENABLE_AUTO_CLAIM_REWARDS).
+# Reading + claiming earned rewards on pre-existing positions is read-side only;
+# it does not create new stake positions, so this coexists with receive-only mode.
 # ---------------------------------------------------------------------------
 
 def _claim_staking_rewards_sync() -> None:
