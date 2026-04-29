@@ -889,7 +889,8 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
                    memory_context: str = "",
                    token_data: dict = None,
                    ecosystem_comparative: str = "",
-                   dune_context: str = "") -> tuple[str, str]:
+                   dune_context: str = "",
+                   research_context: str = "") -> tuple[str, str]:
     if mode is None:
         mode = select_mode(tweet_text)
 
@@ -914,6 +915,13 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
     if token_data:
         user_message += _format_token_data_block(token_data)
 
+    if research_context:
+        user_message += (
+            "RESEARCH (fetched before replying — reference specific findings, numbers, or page content):\n"
+            + research_context
+            + "\n\n"
+        )
+
     # Inject pattern context when the tweet signals a relevant topic
     reply_pattern = get_reply_pattern_context(tweet_text, token_data or {})
     if reply_pattern:
@@ -935,11 +943,18 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
     ]
     url_context_block = ""
     if detected_urls:
-        url_context_block = (
-            f"LINKS/DOMAINS IN THIS TWEET: {', '.join(detected_urls)}\n"
-            "Use the domain name to infer topic context (e.g. 'pob.gamblr.money' → POB staking dashboard; "
-            "'dex.something' → trading interface). Acknowledge what they're sharing.\n\n"
-        )
+        if research_context and "LINK CONTENT" in research_context:
+            # Full content was fetched — point Claude at the RESEARCH block above
+            url_context_block = (
+                f"LINKS IN THIS TWEET: {', '.join(detected_urls)}\n"
+                "Content was fetched — see RESEARCH block above for what the page actually says.\n\n"
+            )
+        else:
+            url_context_block = (
+                f"LINKS/DOMAINS IN THIS TWEET: {', '.join(detected_urls)}\n"
+                "Use the domain name to infer topic context (e.g. 'pob.gamblr.money' → POB staking dashboard; "
+                "'dex.something' → trading interface). Acknowledge what they're sharing.\n\n"
+            )
 
     user_message += (
         f'Tweet from @{author_handle}:\n"{tweet_text}"\n\n'

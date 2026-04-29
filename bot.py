@@ -5,6 +5,10 @@ import logging
 import random
 import re
 import threading
+import urllib.request
+import urllib.error
+import urllib.parse
+from html.parser import HTMLParser
 from datetime import datetime, timezone, timedelta
 
 from database import (
@@ -243,6 +247,177 @@ def _get_tweet_token_data(tweet_text: str) -> dict | None:
     return fetch_token_data_sync(token_name)
 
 
+# ── Research pipeline ─────────────────────────────────────────────────────────
+
+_URL_RE_RESEARCH = re.compile(r'https?://[^\s<>"]+', re.IGNORECASE)
+_SKIP_DOMAINS_RESEARCH = frozenset(['twitter.com', 'x.com', 't.co', 'pic.twitter.com', 'pic.x.com'])
+_STAKING_KEYWORDS = frozenset(['stake', 'staking', 'pob', 'lock', 'locked', 'lockup', 'unstake', 'rewards', 'yield'])
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Minimal HTML parser that pulls title + body text."""
+    _SKIP_TAGS = frozenset(['script', 'style', 'nav', 'header', 'footer', 'noscript', 'iframe'])
+
+    def __init__(self):
+        super().__init__()
+        self.title = ""
+        self._in_title = False
+        self._skip_depth = 0
+        self.text_parts: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'title':
+            self._in_title = True
+        if tag in self._SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag == 'title':
+            self._in_title = False
+        if tag in self._SKIP_TAGS:
+            self._skip_depth = max(0, self._skip_depth - 1)
+
+    def handle_data(self, data):
+        stripped = data.strip()
+        if not stripped:
+            return
+        if self._in_title:
+            self.title += stripped
+        elif self._skip_depth == 0:
+            self.text_parts.append(stripped)
+
+
+def _fetch_link_content(url: str, timeout: int = 5) -> str | None:
+    """Fetch a URL and return a short text summary.
+
+    Returns a string with Title + first ~400 chars of body text, or None on failure.
+    Falls back gracefully — never raises.
+    """
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; glazeprintr/1.0)",
+                "Accept": "text/html,application/json,*/*",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            content_type = resp.headers.get("Content-Type", "")
+            raw = resp.read(12288)  # 12 KB max
+
+        if "json" in content_type:
+            text = raw.decode("utf-8", errors="replace")[:300]
+            return f"Content (JSON): {text}" if text else None
+
+        html = raw.decode("utf-8", errors="replace")
+        parser = _HTMLTextExtractor()
+        try:
+            parser.feed(html)
+        except Exception:
+            pass
+
+        title = parser.title.strip()
+        body = " ".join(parser.text_parts)
+        # Truncate body to ~400 chars at a word boundary
+        if len(body) > 400:
+            body = body[:400].rsplit(" ", 1)[0] + "…"
+
+        parts = []
+        if title:
+            parts.append(f"Title: {title}")
+        if body:
+            parts.append(f"Content: {body}")
+        return "\n".join(parts) if parts else None
+
+    except Exception as e:
+        logger.debug(f"_fetch_link_content({url[:60]}): {e}")
+        return None
+
+
+def _research_tweet(tweet_text: str) -> str:
+    """Research a tweet before replying: fetch linked URLs and gather topic-specific on-chain data.
+
+    Returns a formatted research context string (empty string if nothing found).
+    """
+    parts: list[str] = []
+
+    # 1. Extract and fetch URLs (skip Twitter self-links)
+    raw_urls = _URL_RE_RESEARCH.findall(tweet_text)
+    urls = [u for u in raw_urls if not any(s in u.lower() for s in _SKIP_DOMAINS_RESEARCH)]
+
+    for url in urls[:2]:
+        try:
+            domain = urllib.parse.urlparse(url).netloc.lstrip("www.")
+        except Exception:
+            domain = url[:50]
+
+        content = _fetch_link_content(url)
+        if content:
+            parts.append(f"LINK CONTENT [{domain}]:\n{content}")
+        elif domain:
+            parts.append(f"LINK DOMAIN (fetch failed — infer from name): {domain}")
+
+    # 2. Staking topic — inject live staking data from ecosystem cache
+    lower = tweet_text.lower()
+    if any(kw in lower for kw in _STAKING_KEYWORDS) and _latest_projects:
+        staking_lines: list[str] = []
+
+        # Specific token mentioned?
+        token_name = _extract_token(tweet_text)
+        if token_name:
+            for proj in _latest_projects:
+                if proj.get("name", "").lower() == token_name.lower():
+                    pct = proj.get("staking_pct")
+                    mc = proj.get("market_cap") or 0
+                    if pct is not None:
+                        mc_str = f"${mc/1e6:.2f}M" if mc >= 1e6 else f"${mc:,.0f}"
+                        staking_lines.append(
+                            f"${token_name.upper()} staking: {pct:.1f}% of supply locked (MC {mc_str})"
+                        )
+                    break
+
+        # Top staked tokens from ecosystem
+        staked = [
+            (p["name"], p["staking_pct"], p.get("market_cap") or 0)
+            for p in _latest_projects
+            if p.get("staking_pct") is not None
+        ]
+        staked.sort(key=lambda x: x[1], reverse=True)
+        if staked:
+            top3 = [f"${n.upper()}: {pct:.0f}%" for n, pct, _ in staked[:3]]
+            staking_lines.append(f"Top ecosystem staking conviction: {', '.join(top3)}")
+
+        if staking_lines:
+            parts.append("ON-CHAIN STAKING DATA:\n" + "\n".join(staking_lines))
+
+    # 3. If a specific token is mentioned, note its live stats (supplements token_data)
+    token_name = _extract_token(tweet_text)
+    if token_name and not any(kw in lower for kw in _STAKING_KEYWORDS):
+        for proj in _latest_projects:
+            if proj.get("name", "").lower() == token_name.lower():
+                lines = []
+                chg = proj.get("price_change_24h")
+                vol = proj.get("volume")
+                mc = proj.get("market_cap")
+                buys = proj.get("buys_24h")
+                sells = proj.get("sells_24h")
+                if mc:
+                    mc_str = f"${mc/1e6:.2f}M" if mc >= 1e6 else f"${mc:,.0f}"
+                    lines.append(f"MC: {mc_str}")
+                if chg is not None:
+                    lines.append(f"24h: {chg:+.1f}%")
+                if vol:
+                    lines.append(f"Vol 24h: {'${:.2f}M'.format(vol/1e6) if vol >= 1e6 else '${:,.0f}'.format(vol)}")
+                if buys and sells:
+                    total = buys + sells
+                    lines.append(f"Buy pressure: {buys/total*100:.0f}% ({total} txns)")
+                if lines:
+                    parts.append(f"LIVE ${token_name.upper()} DATA: {' | '.join(lines)}")
+                break
+
+    return "\n\n".join(parts)
+
+
 def _tweet_age_minutes(tweet: dict) -> float | None:
     created_at = tweet.get("created_at")
     if not created_at:
@@ -324,6 +499,15 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
         thread_context = _get_thread_context(tweet)
     memory_context = mem.get_memory_context()
 
+    # Research the tweet: fetch linked URLs + gather topic-specific on-chain data
+    research_context = ""
+    try:
+        research_context = _research_tweet(tweet_text)
+        if research_context:
+            logger.info(f"Research context ({len(research_context)} chars) for tweet {tweet['id']}")
+    except Exception as e:
+        logger.warning(f"_research_tweet failed for {tweet['id']}: {e}")
+
     # Feature: Launch Guide Mode — intercept before normal reply if launch intent detected
     reply_text = None
     mode = None
@@ -364,6 +548,7 @@ def process_tweet(tweet: dict, thread_context: list[dict] | None = None):
                 token_data=token_data,
                 ecosystem_comparative=_get_ecosystem_context_str(),
                 dune_context=_latest_dune_context,
+                research_context=research_context,
             )
         except Exception as e:
             logger.error(f"Claude error for tweet {tweet['id']}: {e}")
