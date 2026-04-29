@@ -85,13 +85,16 @@ async def lifespan(app: FastAPI):
     # Follower scan disabled — Twitter blocks unsolicited replies, wastes API credits.
     # scheduler.add_job(bot.poll_follower_tweets, "interval", minutes=5, id="follower_poller", replace_existing=True,
     #                   max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
+    # Stagger original-tweet startup by 2 min so it doesn't race with QT Glazer at boot.
+    # The threading.Lock in _check_and_claim_post_slot handles any later overlaps.
+    _original_tweet_first_run = _now + timedelta(minutes=2)
     if ENABLE_TIME_OPTIMIZATION:
-        scheduler.add_job(_run_original_tweet_with_reschedule, "date", run_date=_now, id="original_tweeter",
-                          replace_existing=True, max_instances=1, misfire_grace_time=60)
+        scheduler.add_job(_run_original_tweet_with_reschedule, "date", run_date=_original_tweet_first_run,
+                          id="original_tweeter", replace_existing=True, max_instances=1, misfire_grace_time=60)
     else:
         scheduler.add_job(bot.post_original_tweet, "interval", minutes=60, id="original_tweeter",
                           replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=60,
-                          next_run_time=_now)
+                          next_run_time=_original_tweet_first_run)
     scheduler.add_job(bot.refresh_ecosystem_context, "interval", hours=6, id="ecosystem_refresher", replace_existing=True,
                       max_instances=1, coalesce=True, misfire_grace_time=60, next_run_time=_now)
     scheduler.add_job(bot.refresh_top_tickers, "interval", hours=6, id="ticker_refresher", replace_existing=True,

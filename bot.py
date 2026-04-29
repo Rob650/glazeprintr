@@ -765,9 +765,6 @@ def poll_qt_glazer_list():
         logger.info("Bot paused — skipping QT Glazer poll")
         return
 
-    if not _check_and_claim_post_slot("QT Glazer"):
-        return
-
     if not _qt_glazer_since_id_loaded:
         _qt_glazer_since_id = get_qt_glazer_since_id()
         _qt_glazer_since_id_loaded = True
@@ -836,6 +833,12 @@ def poll_qt_glazer_list():
 
     if not candidates:
         logger.info("QT Glazer: no candidates after filtering")
+        return
+
+    # Claim the global post slot now — we have real candidates and are about to post.
+    # Claiming here (not at function entry) avoids consuming the slot when the list
+    # has no relevant tweets, which would otherwise block the original-tweet job.
+    if not _check_and_claim_post_slot("QT Glazer"):
         return
 
     # Pass 2: score all candidates, pick the highest-scoring one
