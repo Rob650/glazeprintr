@@ -569,6 +569,38 @@ Rules:
 - Max 280 chars""",
 }
 
+REPLY_VARIETY_PROMPT = """REPLY STYLE — pick ONE angle for this specific reply. Rotate hard. Never default to the same pattern twice.
+
+STYLE MENU (choose the one that fits this tweet best):
+• OBSERVATION — comment on what the tweet reveals about the person/project. Don't open with stats.
+  Ex: "the fact you're tracking $BELIEF staking daily already puts you ahead of 99% of glazers. conviction is a practice not a vibe"
+• QUESTION — genuine follow-up that shows you actually read what they said.
+  Ex: "you locked 180d at this MC? what was the signal — the buy pressure or the staking wall?"
+• ONE STANDOUT STAT — pick the SINGLE most surprising number. Skip the rest. One stat with real context beats three stats with no soul.
+  Ex: "73% of $BELIEF supply is locked in POB. circulating supply is basically a rumor at this point. heavy glaze"
+• COMPARISON — contrast against another token, pumpfun, or the broader ecosystem. Make the gap undeniable.
+  Ex: "meanwhile pumpfun holders sit on bags with zero yield. $BELIEF lockers collect fees every txn. unglazed behavior over there"
+• NARRATIVE — tell the story the numbers are hiding. What's actually happening here?
+  Ex: "three days ago this was sub-$100K MC. now 890 holders, 68% buy pressure, 62% staked. that's not momentum — that's a conviction filter running"
+• PUNCHY — one or two sentences, zero hedging. Hit and leave.
+  Ex: "certified glazer behavior. LFP 🖨️"
+• ANALYTICAL — break down what a signal actually means. Teach something with an edge.
+  Ex: "68% buys across 1,400 txns isn't price action — it's quiet accumulation you can measure. most CT can't read this. you can"
+
+BANNED REPLY PATTERNS — never produce these:
+✗ Pipe-separated stat dumps: "MC: $X | 24h: +Y% | Vol: $Z" — this is a data table, not a tweet
+✗ Opening with the token name followed immediately by listing all its metrics
+✗ Three or more stats in a row with no human insight between them
+✗ "Great [question/take/point/post]!" — sycophantic opener
+✗ Restating what the user just said before adding your take
+✗ The same opening angle as your last several replies — check BANNED OPENERS
+
+DATA IS CONTEXT, NOT CONTENT: Research data and token stats exist to inform your angle — not to be copy-pasted into the reply verbatim. ONE number used with precision and a real interpretation beats a spreadsheet dump. If you have staking data, buy pressure, and volume — pick the one that makes the best point for this specific tweet and leave the rest in the background.
+
+DO NOT repeat the same reply structure. Every reply must have a different opening, a different angle, a different tone.
+"""
+
+
 ORIGINAL_TWEET_PROMPT = """MODE: Original Tweet — DATA-DRIVEN GLAZE
 
 BANNED REPETITIVE PHRASES — never use these unless the topic explicitly demands it:
@@ -956,6 +988,8 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
                 "'dex.something' → trading interface). Acknowledge what they're sharing.\n\n"
             )
 
+    user_message += REPLY_VARIETY_PROMPT + "\n"
+
     user_message += (
         f'Tweet from @{author_handle}:\n"{tweet_text}"\n\n'
         f"{url_context_block}"
@@ -965,7 +999,7 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
         "- A question → actually answer the question\n"
         "- A feature / announcement → engage with that specific feature\n"
         "DO NOT fall back to generic ecosystem hype. Show you read their tweet.\n"
-        "Include at least one REAL DATA POINT if token data was provided above.\n"
+        "Pick ONE style from the REPLY STYLE MENU above — data informs your angle, it does not get listed verbatim.\n"
         "Reply ONLY with the tweet text, no quotes, no explanation."
     )
 
