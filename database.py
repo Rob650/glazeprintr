@@ -321,6 +321,21 @@ def init_db():
         """)
         conn.commit()
 
+        # Feature: Research cache — persistent store of URL/domain/topic knowledge gathered during reply research
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS research_cache (
+                key TEXT PRIMARY KEY,
+                key_type TEXT NOT NULL DEFAULT 'url',
+                content TEXT NOT NULL,
+                hit_count INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now')),
+                last_used_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_research_cache_type ON research_cache(key_type, last_used_at);
+            DELETE FROM research_cache WHERE created_at < datetime('now', '-30 days');
+        """)
+        conn.commit()
+
         # Feature: Wallet glazing — bot's own deposit wallet tracking
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS wallet_holdings (
@@ -1329,3 +1344,62 @@ def record_reward_claim(token_ticker: str, position_id: str, amount_claimed: flo
                VALUES (?, ?, ?)""",
             (token_ticker.lower(), position_id, amount_claimed)
         )
+
+
+# --- research_cache (persistent knowledge gathered during reply research) ---
+
+def store_research_finding(key: str, content: str, key_type: str = "url") -> None:
+    """Persist a research finding keyed by URL, domain, or topic.
+
+    Upserts on conflict: updates content and bumps last_used_at but preserves
+    hit_count so we can rank high-value cached entries.
+    """
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO research_cache (key, key_type, content)
+               VALUES (?, ?, ?)
+               ON CONFLICT(key) DO UPDATE SET
+                 content=excluded.content,
+                 last_used_at=datetime('now')""",
+            (key, key_type, content),
+        )
+
+
+def get_research_finding(key: str, max_age_days: int = 7) -> str | None:
+    """Return cached content for key if it exists and is younger than max_age_days.
+
+    Increments hit_count so frequently-used entries can be surfaced first.
+    Returns None if not found or expired.
+    """
+    with db() as conn:
+        row = conn.execute(
+            """SELECT content FROM research_cache
+               WHERE key = ? AND created_at >= datetime('now', ?)""",
+            (key, f"-{max_age_days} days"),
+        ).fetchone()
+        if row:
+            conn.execute(
+                """UPDATE research_cache
+                   SET hit_count = hit_count + 1, last_used_at = datetime('now')
+                   WHERE key = ?""",
+                (key,),
+            )
+            return row[0]
+    return None
+
+
+def get_all_research_findings(limit: int = 30) -> list[dict]:
+    """Return all non-expired research findings, most-used first.
+
+    Used by the intelligence layer to inject accumulated knowledge into prompts.
+    """
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT key, key_type, content, hit_count, created_at, last_used_at
+               FROM research_cache
+               WHERE created_at >= datetime('now', '-30 days')
+               ORDER BY hit_count DESC, last_used_at DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
