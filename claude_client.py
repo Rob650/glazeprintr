@@ -923,9 +923,33 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
     if banned:
         user_message += f"BANNED OPENERS — do NOT start your tweet with any of these words: {', '.join(banned)}\n\n"
 
+    # Extract URLs/bare domains from tweet for context annotation
+    _url_extract_re = re.compile(
+        r'https?://[^\s]+|(?<![/@\w])[\w-]+\.[\w]{2,}(?:/[\w/.-]*)?(?=\s|$)',
+        re.IGNORECASE,
+    )
+    _skip_domains = {'twitter.com', 'x.com', 't.co', 'pic.twitter.com', 'pic.x.com'}
+    detected_urls = [
+        u for u in _url_extract_re.findall(tweet_text)
+        if not any(s in u.lower() for s in _skip_domains)
+    ]
+    url_context_block = ""
+    if detected_urls:
+        url_context_block = (
+            f"LINKS/DOMAINS IN THIS TWEET: {', '.join(detected_urls)}\n"
+            "Use the domain name to infer topic context (e.g. 'pob.gamblr.money' → POB staking dashboard; "
+            "'dex.something' → trading interface). Acknowledge what they're sharing.\n\n"
+        )
+
     user_message += (
         f'Tweet from @{author_handle}:\n"{tweet_text}"\n\n'
-        "READ THIS TWEET. Respond directly to what they're saying — engage with their specific content.\n"
+        f"{url_context_block}"
+        "MANDATORY — BE SPECIFIC: Your reply must directly engage with what this tweet is actually about.\n"
+        "- Staking / POB / dashboard → reply about staking specifics, numbers, conviction\n"
+        "- A link or project → acknowledge the specific thing they shared, don't ignore it\n"
+        "- A question → actually answer the question\n"
+        "- A feature / announcement → engage with that specific feature\n"
+        "DO NOT fall back to generic ecosystem hype. Show you read their tweet.\n"
         "Include at least one REAL DATA POINT if token data was provided above.\n"
         "Reply ONLY with the tweet text, no quotes, no explanation."
     )
