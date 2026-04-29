@@ -26,6 +26,7 @@ ECOSYSTEM_TOKENS = [
     "belief", "ooo", "rotus", "fatchoi", "deployr", "patapim",
     "roi", "print", "cmyk", "pve", "fsjal",
     "brrr", "quack", "lfp", "stakr", "pob500",
+    "ket", "🚀",
 ]
 
 # ── Heat score component weights (must sum to 1.0) ───────────────────────────

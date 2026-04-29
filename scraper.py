@@ -44,6 +44,8 @@ KNOWN_CONTRACTS: dict[str, str] = {
     "stakr":   "Da2Vkk5u3zMkyfa61mqs6Kgtdpf7akKK1FrZvzkDbrrr",
     "pob500":  "B8ErKF68PpedTmRMdbhRzTgJ8u5XfHRp2v8krg8Qbrrr",
     "fsjal":   "AiNFufCfmKADdtq3cz2Xaj94EVWfKG1iHyyWZLFEbrrr",
+    "ket":     "71vDdeajwpXGnj98kBvDZmVuuAYSPYiPbdeU5xGfbrrr",
+    "🚀":      "EYyJogTtE8u9WjESjk3AwN59M6SCDrdjuxSw7acUbrrr",
 }
 
 # Key tokens for priority staking data lookups
