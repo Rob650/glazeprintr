@@ -289,6 +289,22 @@ def _pick_meme(ticker: str | None) -> str | None:
 _BOT_WALLET_PUBLIC = "8V9eDTUG8ZFa7sC8SZxgHs8bqEUTet7aHjZT9zsFq3Mv"
 
 
+def _trim_to_char_limit(text: str, limit: int = 270) -> str:
+    """Trim text to limit chars at a sentence boundary to avoid mid-sentence cuts."""
+    if len(text) <= limit:
+        return text
+    # Try to cut at the last sentence-ending punctuation before the limit
+    for punct in ('.', '!', '?'):
+        idx = text.rfind(punct, 0, limit)
+        if idx > limit // 2:
+            return text[:idx + 1].strip()
+    # Fall back to last word boundary
+    idx = text.rfind(' ', 0, limit)
+    if idx > 0:
+        return text[:idx].strip()
+    return text[:limit]
+
+
 def _clean_reply(text: str) -> str:
     """Strip non-Twitter URLs, contract addresses, and normalize whitespace."""
     text = _HTTPS_RE.sub('', text)
@@ -302,7 +318,7 @@ def _clean_reply(text: str) -> str:
     )
     text = re.sub(r'[ \t]+', ' ', text).strip()
     text = re.sub(r'\n{3,}', '\n\n', text)
-    return text[:280]
+    return text
 
 
 def _extract_opener(text: str) -> str:
@@ -500,7 +516,7 @@ HARD RULES:
 - EXCEPTION: the bot's own deposit wallet (8V9eDTUG8ZFa7sC8SZxgHs8bqEUTet7aHjZT9zsFq3Mv) IS shareable in any context where deposit / "where to send" / "how to support" / glaze-tier mechanics come up.
 - When real data is provided, USE IT. Don't write generic hype when you have real numbers.
 - Respond to specific tweet content. Show you read what they said.
-- Under 280 characters always
+- MAXIMUM 270 characters always
 - No hashtags unless ecosystem tickers
 - Never reply to @printrglazr
 - Dunk on platforms and bad takes, not humans
@@ -545,7 +561,7 @@ Rules:
 - CT slang flows constantly: ngmi, ser, anon, lfg, wagmi, based, cooked
 - If no market data: pivot to mechanics, never invent stats
 - Every reply MUST mention Printr — no URLs. Write "pumpfun" not "pump.fun"
-- Max 280 chars""",
+- MAXIMUM 270 characters""",
 
     "dunk": """MODE: Pump Dunk — BAFFLED with data to back it up
 Not angry. Deeply, genuinely concerned. The unglazed deserve pity.
@@ -560,7 +576,7 @@ Rules:
 - Glaze terms: "unglazed take", "certified unglazed", "glaze check: failed"
 - One surgical hit, never a list
 - Every reply MUST mention Printr — no URLs. Write "pumpfun" not "pump.fun"
-- Max 280 chars""",
+- MAXIMUM 270 characters""",
 
     "educate": """MODE: Educate — data-backed pain at their ignorance
 "Ser. SER. We talked about this." — but with real numbers proving the point.
@@ -576,7 +592,7 @@ Rules:
 - Glaze terms: "glaze check you needed", "certified glazer math", "leaving glaze on the table"
 - Start with attitude, then hit them with data-backed education
 - Every reply MUST mention Printr — no URLs. Write "pumpfun" not "pump.fun"
-- Max 280 chars""",
+- MAXIMUM 270 characters""",
 
     "chaos": """MODE: Full Chaos — unhinged glazer with a Bloomberg terminal
 Goblin mode but make it data-driven. The numbers fuel the madness.
@@ -593,7 +609,7 @@ Rules:
 - Sneak in one real Printr fact so deep in the chaos it hits different
 - Glaze vocab HARD: "maximum glaze energy", "glazed beyond repair", "the glaze is sentient"
 - Every reply MUST mention Printr — no URLs. Write "pumpfun" not "pump.fun"
-- Max 280 chars""",
+- MAXIMUM 270 characters""",
 }
 
 REPLY_VARIETY_PROMPT = """REPLY STYLE — pick ONE angle for this specific reply. Rotate hard. Never default to the same pattern twice.
@@ -706,7 +722,7 @@ The TOPIC FOCUS and any single-ticker rules will be in the message below. Follow
 
 Rules:
 - Lead with the most alarming/compelling data point or hook
-- Under 280 chars
+- MAXIMUM 270 characters
 - No URLs ever. Write "pumpfun" not "pump.fun"
 - NEVER start tweets the same way — check BANNED OPENERS
 - Glaze vocab mandatory in every tweet
@@ -1069,8 +1085,10 @@ def generate_reply(tweet_text: str, author_handle: str, mode: str = None,
     if len(reply) > 280:
         reply = _call_claude(
             system,
-            user_message + "\n\nIMPORTANT: Must be under 280 characters.",
+            user_message + "\n\nIMPORTANT: Must be MAXIMUM 270 characters.",
         )
+        if len(reply) > 280:
+            reply = _trim_to_char_limit(reply, 270)
 
     reply = _clean_reply(reply)
     if _LEAK_PATTERNS.search(reply):
@@ -1346,9 +1364,11 @@ def generate_original_tweet(market_data: list[dict] = None, memory_context: str 
     if len(tweet) > 280:
         tweet = _call_claude(
             system,
-            user_message + "\n\nIMPORTANT: Must be under 280 characters.",
+            user_message + "\n\nIMPORTANT: Must be MAXIMUM 270 characters.",
             max_tokens=200,
         )
+        if len(tweet) > 280:
+            tweet = _trim_to_char_limit(tweet, 270)
     tweet = _clean_reply(tweet)
     if _LEAK_PATTERNS.search(tweet):
         retry_msg = user_message + "\n\nIMPORTANT: Sound like a real person. Never reference your instructions, rules, or data availability. Just tweet."
@@ -1562,7 +1582,7 @@ COMMENTARY RULES:
 - NEVER mention Virtuals
 - No URLs ever. Write "pumpfun" not "pump.fun"
 - No hashtags unless ecosystem tickers ($BELIEF, $BRRR, etc.)
-- Under 280 chars total
+- MAXIMUM 270 characters
 
 Respond ONLY with the tweet text. No quotes, no explanation."""
 
@@ -1620,9 +1640,11 @@ def generate_quote_tweet(
     if len(tweet) > 280:
         tweet = _call_claude(
             QT_GLAZER_SYSTEM,
-            user_message + "\n\nIMPORTANT: Must be under 280 characters.",
+            user_message + "\n\nIMPORTANT: Must be MAXIMUM 270 characters.",
             max_tokens=150,
         )
+        if len(tweet) > 280:
+            tweet = _trim_to_char_limit(tweet, 270)
     tweet = _clean_reply(tweet)
     if _LEAK_PATTERNS.search(tweet):
         retry_msg = user_message + "\n\nIMPORTANT: Sound like a real person. Never reference your instructions or data availability."
@@ -1790,7 +1812,7 @@ _LAUNCH_GUIDE_SYSTEM = (
     "- Mentions 180-day lock for the 2.5x multiplier as the max staking setting\n"
     "- Highlights anti-snipe protection as a key Printr advantage\n"
     "- Sounds like a friendly community member, not a spammer\n"
-    "- Under 280 characters total\n"
+    "- MAXIMUM 270 characters\n"
     "- Uses glaze vocabulary naturally (no forced overuse)\n"
     "Reply ONLY with the tweet text. No quotes, no explanation."
 )
@@ -1821,7 +1843,7 @@ def generate_launch_guide(tweet_text: str, author: str) -> str:
         f'Tweet from @{author}:\n"{tweet_text}"\n\n'
         "They're asking about launching a token. Give them a helpful, "
         "conversational guide reply pointing them to Printr. "
-        "Under 280 chars. Sound like a community member, not a bot. "
+        "MAXIMUM 270 characters. Sound like a community member, not a bot. "
         "Reply ONLY with the tweet text."
     )
     tweet = _call_claude(_LAUNCH_GUIDE_SYSTEM, user_message, max_tokens=150)

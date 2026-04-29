@@ -153,7 +153,7 @@ def fetch_mentions(since_id: str | None = None) -> list[dict]:
 
 
 def _clean_tweet(text: str) -> str:
-    """Strip non-Twitter URLs, normalize whitespace, ensure ends with \\n\\n🙏, truncate to 280 chars."""
+    """Strip non-Twitter URLs, normalize whitespace, ensure ends with \\n\\n🙏."""
     text = _HTTPS_RE.sub('', text)
     text = _BARE_TCO_RE.sub('', text)
     text = _PUMP_FUN_RE.sub('pumpfun', text)
@@ -162,8 +162,7 @@ def _clean_tweet(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
     if not text.rstrip().endswith('🙏'):
         text = text.rstrip() + '\n\n🙏'
-    # Twitter weighted character count (emoji, URLs count differently); 270 leaves buffer
-    return text[:270]
+    return text
 
 
 def _clean_qt_body(text: str, url_suffix: str) -> str:
@@ -174,7 +173,7 @@ def _clean_qt_body(text: str, url_suffix: str) -> str:
     text = _PRINTR_MONEY_RE.sub('Printr', text)
     text = re.sub(r'[ \t]+', ' ', text).strip()
     text = re.sub(r'\n{3,}', '\n\n', text)
-    return text[:280 - len(url_suffix)]
+    return text
 
 
 def _log_post_error(action: str, e: tweepy.TweepyException) -> None:
