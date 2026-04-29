@@ -476,6 +476,155 @@ def get_rewards_summary() -> dict:
     }
 
 
+# ── SOL price cache ───────────────────────────────────────────────────────────
+
+_cached_sol_price: tuple[float, float] = (0.0, 0.0)  # (price_usd, change_24h_pct)
+_sol_price_ts: float = 0.0
+_SOL_PRICE_TTL = 300  # seconds
+
+
+def fetch_sol_price() -> tuple[float, float]:
+    """Return (price_usd, change_24h_pct) for SOL. Caches for 5 min. Returns (0, 0) on failure."""
+    global _cached_sol_price, _sol_price_ts
+    now = time.time()
+    if now - _sol_price_ts < _SOL_PRICE_TTL and _cached_sol_price[0] > 0:
+        return _cached_sol_price
+    try:
+        import urllib.request
+        import json as _json
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_24hr_change=true"
+        req = urllib.request.Request(url, headers={"User-Agent": "glazeprintr/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read())
+        sol = data.get("solana", {})
+        price = float(sol.get("usd") or 0)
+        chg = float(sol.get("usd_24h_change") or 0)
+        if price > 0:
+            _cached_sol_price = (price, chg)
+            _sol_price_ts = now
+        return _cached_sol_price
+    except Exception as exc:
+        logger.debug(f"fetch_sol_price: {exc}")
+        return _cached_sol_price
+
+
+def get_ecosystem_rankings_for_token(token_name: str) -> str:
+    """
+    Build a comparative context block for a specific token.
+    Includes ecosystem avg 24h, token rank, top movers, and SOL macro context.
+    Injected into the tweet generation prompt so Claude frames stats comparatively.
+    """
+    intel = _cached_intelligence
+    if not intel or not intel.projects:
+        return ""
+
+    projects = intel.projects
+    token_lower = token_name.lower()
+
+    # Simple (unweighted) avg 24h across all tokens with data
+    chg_data: list[tuple[str, float]] = [
+        (p.get("name", "").lower(), p["price_change_24h"])
+        for p in projects
+        if p.get("price_change_24h") is not None
+    ]
+    if not chg_data:
+        return ""
+
+    chg_data.sort(key=lambda x: x[1], reverse=True)
+    values = [x[1] for x in chg_data]
+    avg_24h = sum(values) / len(values)
+    green_count = sum(1 for v in values if v > 0)
+
+    lines = ["ECOSYSTEM RANKING CONTEXT (frame the featured token comparatively — use these exact figures):"]
+    lines.append(
+        f"  Ecosystem avg 24h: {avg_24h:+.1f}% "
+        f"({len(chg_data)} tokens tracked | {green_count} green, {len(chg_data) - green_count} red)"
+    )
+
+    # Token-specific rank and comparison
+    token_rank: int | None = None
+    token_chg: float | None = None
+    for i, (name, chg) in enumerate(chg_data):
+        if name == token_lower:
+            token_rank = i + 1
+            token_chg = chg
+            break
+
+    if token_rank is not None and token_chg is not None:
+        total = len(chg_data)
+        if token_rank == 1:
+            lines.append(
+                f"  ${token_name.upper()} is #1 on Printr today — best performer in the ecosystem "
+                f"({token_chg:+.1f}% vs ecosystem avg {avg_24h:+.1f}%)"
+            )
+        else:
+            lines.append(
+                f"  ${token_name.upper()} ranks #{token_rank} of {total} by 24h performance "
+                f"({token_chg:+.1f}% vs ecosystem avg {avg_24h:+.1f}%)"
+            )
+
+        # Gap vs ecosystem avg
+        delta = token_chg - avg_24h
+        if abs(delta) >= 5:
+            direction = "outperforming" if delta > 0 else "underperforming"
+            lines.append(f"  Gap vs ecosystem avg: {direction} by {abs(delta):.1f}pp")
+
+        # If #1, compare to #2
+        if token_rank == 1 and len(chg_data) > 1:
+            next_name, next_chg = chg_data[1]
+            if next_chg > 0 and token_chg > 0:
+                mult = token_chg / next_chg
+                lines.append(
+                    f"  Outpacing #2 (${next_name.upper()} at {next_chg:+.1f}%) "
+                    f"by {mult:.1f}x"
+                )
+            else:
+                gap = token_chg - next_chg
+                lines.append(
+                    f"  Ahead of #2 (${next_name.upper()} at {next_chg:+.1f}%) "
+                    f"by {gap:.1f}pp"
+                )
+
+    # Top 3 movers for context
+    top3 = chg_data[:3]
+    top3_str = ", ".join(f"${n.upper()} {c:+.1f}%" for n, c in top3)
+    lines.append(f"  Top 3 movers today: {top3_str}")
+
+    # MC rank
+    mc_data: list[tuple[str, float]] = [
+        (p.get("name", "").lower(), float(p.get("market_cap") or 0))
+        for p in projects if (p.get("market_cap") or 0) > 0
+    ]
+    mc_data.sort(key=lambda x: x[1], reverse=True)
+    for i, (name, _mc) in enumerate(mc_data):
+        if name == token_lower:
+            lines.append(f"  ${token_name.upper()} MC rank: #{i + 1} of {len(mc_data)} in ecosystem")
+            break
+
+    # SOL macro context + historical signal
+    sol_price, sol_chg = fetch_sol_price()
+    if sol_price > 0:
+        sol_dir = "up" if sol_chg >= 1 else "down" if sol_chg <= -1 else "flat"
+        lines.append(
+            f"  SOL macro: ${sol_price:,.0f} ({sol_chg:+.1f}% 24h) — "
+            f"SOL {'rising' if sol_dir == 'up' else 'falling' if sol_dir == 'down' else 'flat'}"
+        )
+        # Counter-trend signal: token running against red SOL — highlight historical pattern
+        if token_chg is not None and sol_chg <= -2 and token_chg >= 10:
+            lines.append(
+                f"  COUNTER-TREND SIGNAL: ${token_name.upper()} up {token_chg:+.1f}% while SOL is down {sol_chg:.1f}%. "
+                f"Relative strength vs a red market — historically this is the setup before continuation, "
+                f"not a coincidence. Tokens that run against a falling $SOL tend to hold stronger on the bounce."
+            )
+        elif token_chg is not None and sol_chg <= -2 and token_chg > 0:
+            lines.append(
+                f"  RELATIVE STRENGTH: ${token_name.upper()} holding positive while SOL bleeds {sol_chg:.1f}%. "
+                f"Green token in a red macro — that's conviction, not speculation."
+            )
+
+    return "\n".join(lines)
+
+
 # ── Cache management ──────────────────────────────────────────────────────────
 
 

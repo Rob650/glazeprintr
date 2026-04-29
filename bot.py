@@ -1881,6 +1881,16 @@ async def post_original_tweet():
         if not paid_glaze_ticker:
             bucket_name, bucket_ticker, bucket_ctx = _select_topic_bucket(projects)
 
+        # Enrich combined_ctx with ecosystem ranking context for the featured token
+        featured_ticker = paid_glaze_ticker or bucket_ticker
+        if featured_ticker:
+            try:
+                ranking_ctx = intel_mod.get_ecosystem_rankings_for_token(featured_ticker)
+                if ranking_ctx:
+                    combined_ctx = (combined_ctx + "\n\n" + ranking_ctx) if combined_ctx else ranking_ctx
+            except Exception as e:
+                logger.warning(f"ecosystem ranking context failed for {featured_ticker}: {e}")
+
         memory_context = mem.get_memory_context()
         top_tickers = _get_top_tickers(10)
         tweet_text, img_path = generate_original_tweet(
