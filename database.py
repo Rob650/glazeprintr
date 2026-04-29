@@ -29,20 +29,24 @@ def db():
 
 def init_db():
     with db() as conn:
-        # Migrate existing databases that predate the staking_pct column
+        # Migrate existing databases that predate the staking_pct column.
+        # On a fresh DB the table doesn't exist yet (CREATE TABLE runs below) — that's fine,
+        # the CREATE statement already includes the column.
         try:
             conn.execute("ALTER TABLE memory_project_data ADD COLUMN staking_pct REAL")
             conn.commit()
         except sqlite3.OperationalError as e:
-            if "already exists" not in str(e):
+            msg = str(e)
+            if "already exists" not in msg and "no such table" not in msg:
                 raise
 
-        # Migrate: add our_reply_tweet_id column to replied_tweets
+        # Migrate: add our_reply_tweet_id column to replied_tweets (same fresh-DB caveat)
         try:
             conn.execute("ALTER TABLE replied_tweets ADD COLUMN our_reply_tweet_id TEXT")
             conn.commit()
         except sqlite3.OperationalError as e:
-            if "already exists" not in str(e):
+            msg = str(e)
+            if "already exists" not in msg and "no such table" not in msg:
                 raise
 
         # Migrate: add ecosystem_tweets table if missing

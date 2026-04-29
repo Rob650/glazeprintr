@@ -1,0 +1,10 @@
+.claude/
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.sqlite
+.git/
+GLAZEPRINTR_SPEC_DECK.*
+slide-*.jpg
+.DS_Store
